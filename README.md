@@ -148,6 +148,17 @@ shutdown (fallout from ort's exit handler, not the root cause). Point
 - `input_ids`/`attention_mask` feed as int64; pooling takes the last
   attended token (`mask_sum - 1`, clamped ≥ 0).
 
+## Conformance
+
+`fixtures/golden_jina_v5_text_small.json` pins the frozen vector space:
+4 canonical texts × Query/Document prefixes × dims 64/512 (12 vectors) +
+exact token counts, generated with embroider 0.1.3 / onnxruntime 1.29.0
+CPU / text-embed policy. Consumers vendor this file and assert live
+vectors against it (`abs=1e-6` — catches wrong model, pooling, prefix,
+or truncation; immune to cross-CPU noise). Regenerate only on an
+intentional contract change, which is a new minor version plus a
+re-index-everything notice. See `COMPAT.md` for the release matrix.
+
 ## Testing
 
 - **Rust unit tests** (21, pure — no network, no dylib, no tokenizer
