@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
-[![crates.io downloads](https://img.shields.io/crates/d/embroider)](https://crates.io/crates/embroider)
 [![docs.rs](https://img.shields.io/docsrs/embroider)](https://docs.rs/embroider)
 [![PyPI](https://img.shields.io/pypi/v/embroider)](https://pypi.org/project/embroider/)
 [![Python](https://img.shields.io/pypi/pyversions/embroider)](https://pypi.org/project/embroider/)
