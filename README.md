@@ -1,5 +1,14 @@
 # embroider — Jina v5 text embeddings (Rust core, PyO3)
 
+[![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
+[![crates.io downloads](https://img.shields.io/crates/d/embroider)](https://crates.io/crates/embroider)
+[![docs.rs](https://img.shields.io/docsrs/embroider)](https://docs.rs/embroider)
+[![PyPI](https://img.shields.io/pypi/v/embroider)](https://pypi.org/project/embroider/)
+[![Python](https://img.shields.io/pypi/pyversions/embroider)](https://pypi.org/project/embroider/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/embroider)](https://pypi.org/project/embroider/)
+[![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
+
 One embedding engine, two consumers. `embroider` turns text into vectors
 via ONNX Runtime — and, like its name in the bobine/mordant family, the
 spool feeds the loom: **bobine** (PDF/Office → Markdown) uses the ONNX
