@@ -1,0 +1,34 @@
+[package]
+name = "embroider"
+version = "0.1.0"
+edition = "2021"
+description = "Text embroidery: Jina v5 text embeddings via ONNX Runtime (Rust core, optional PyO3 bindings) — shared by bobine and okfgraph"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/opticsWolf/embroider"
+homepage = "https://github.com/opticsWolf/embroider"
+keywords = ["embeddings", "onnx", "jina", "text", "nlp"]
+categories = ["text-processing"]
+
+[lib]
+name = "embroider"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Opt-in PyO3 bindings (`python/embroider` wheels; maturin builds with this
+# feature). The pure-Rust crate on crates.io builds without it — no Python
+# linking, no pyo3 in downstream dependency trees (bobine pattern).
+extension-module = ["dep:pyo3", "pyo3/extension-module"]
+
+[dependencies]
+# ONNX Runtime (same pin as bobine: dynamic load, accelerator probe + CPU
+# fallback). Provider features only gate EP registration code under
+# `load-dynamic` — no additional runtime is linked. `ndarray` aligns tensor
+# types (0.17).
+ort = { version = "2.0.0-rc.13", features = ["load-dynamic", "cuda", "rocm", "directml", "openvino", "coreml", "tensorrt", "half", "ndarray"] }
+tokenizers = "0.21"
+hf-hub = { version = "1.0", features = ["blocking", "rustls-tls"] }
+ndarray = "0.17"
+pyo3 = { version = "0.29", optional = true }
+anyhow = "1"

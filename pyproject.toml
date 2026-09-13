@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "embroider"
+version = "0.1.0"
+description = "Jina v5 text embeddings via ONNX Runtime (Rust core, PyO3 bindings)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "embroider"
+features = ["extension-module"]

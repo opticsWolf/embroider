@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # Pure unit tests — no ORT dylib, no network, no Python linking.
+      - run: cargo test --locked
+      # Default build stays Python-free (bobine-pattern enforcement).
+      - run: cargo check --locked
+      # The wheel path (pyo3 bindings) must still compile.
+      - run: cargo check --locked --features extension-module
