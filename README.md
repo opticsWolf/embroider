@@ -5,7 +5,6 @@
 [![docs.rs](https://img.shields.io/docsrs/embroider)](https://docs.rs/embroider)
 [![PyPI](https://img.shields.io/pypi/v/embroider)](https://pypi.org/project/embroider/)
 [![Python](https://img.shields.io/pypi/pyversions/embroider)](https://pypi.org/project/embroider/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/embroider)](https://pypi.org/project/embroider/)
 [![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
 
 One embedding engine, two consumers. `embroider` turns text into vectors
