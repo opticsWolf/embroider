@@ -5,6 +5,16 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-09-13
+
+### Changed
+- `apply_providers` is now infallible (returns the builder directly): every
+  path already yielded a usable builder, so the `Result` forced needless
+  error-mapping on consumers (bobine's seven slot call sites).
+- `SessionPolicy::apply(builder)` added — policies are now publicly
+  appliable to a builder; `build_session` uses it internally. Bobine adopts
+  `ort_defaults().apply(...)` in Phase 2 of the spin-off.
+
 ## [0.1.1] — 2026-09-13
 
 ### Fixed

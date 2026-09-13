@@ -6,10 +6,10 @@
 //! `ort_defaults()` leaves ONNX at its own defaults (what bobine's vision
 //! sessions use today — adopted with zero behavior change).
 
-use crate::error::Result;
+use crate::error::{oe, Result};
 use crate::probe::cuda_available;
 use anyhow::anyhow;
-use ort::session::builder::GraphOptimizationLevel;
+use ort::session::builder::{GraphOptimizationLevel, SessionBuilder};
 
 /// Inference device request. Accelerators are opportunistic:
 /// requested-but-missing warns once and degrades to CPU (never fatal).
@@ -58,6 +58,23 @@ impl SessionPolicy {
     /// ORT defaults — for consumers that never tuned their sessions.
     pub fn ort_defaults() -> Self {
         Self { opt_level: None, intra_threads: None, inter_threads: None }
+    }
+
+    /// Apply this policy to a session builder. `None` fields leave the
+    /// ORT default in place — `ort_defaults().apply(b)` is a no-op that
+    /// exists to make the *choice* of untuned sessions explicit and
+    /// swappable per slot.
+    pub fn apply(&self, mut builder: SessionBuilder) -> Result<SessionBuilder> {
+        if let Some(level) = self.opt_level {
+            builder = oe(builder.with_optimization_level(level))?;
+        }
+        if let Some(n) = self.intra_threads {
+            builder = oe(builder.with_intra_threads(n))?;
+        }
+        if let Some(n) = self.inter_threads {
+            builder = oe(builder.with_inter_threads(n))?;
+        }
+        Ok(builder)
     }
 }
 

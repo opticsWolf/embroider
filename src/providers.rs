@@ -5,7 +5,6 @@
 //! copies. Pure functions here are unit-testable without a model, an ORT
 //! dylib, or Python.
 
-use crate::error::{oe, Result};
 use ort::ep::{
     ExecutionProviderDispatch, CoreML, DirectML, OpenVINO, ROCm, CUDA,
 };
@@ -49,10 +48,13 @@ pub fn map_provider(name: &str) -> ProviderMapping {
 /// CPU/unknown names contribute nothing; when no accelerator survives, the
 /// builder is returned untouched. Registration failure against the loaded
 /// library degrades to CPU instead of failing model initialization.
+///
+/// Infallible by design: every path yields a usable builder, so callers
+/// chain straight into `commit_from_file` without an error arm.
 pub fn apply_providers(
     builder: ort::session::builder::SessionBuilder,
     providers: &[String],
-) -> Result<ort::session::builder::SessionBuilder> {
+) -> ort::session::builder::SessionBuilder {
     let mut eps: Vec<ExecutionProviderDispatch> = Vec::new();
     for p in providers {
         if let ProviderMapping::Accelerator(d) = map_provider(p) {
@@ -60,19 +62,19 @@ pub fn apply_providers(
         }
     }
     if eps.is_empty() {
-        return Ok(builder);
+        return builder;
     }
     // The clone keeps the pristine builder for fallback: only the attempt
     // carries accelerator options.
     let attempt = builder.clone();
-    match oe(attempt.with_execution_providers(&eps)) {
-        Ok(configured) => Ok(configured),
+    match attempt.with_execution_providers(&eps) {
+        Ok(configured) => configured,
         Err(e) => {
             eprintln!(
                 "embroider: accelerator providers unavailable in this ONNX Runtime \
                  library ({e:#}); using CPU"
             );
-            Ok(builder)
+            builder
         }
     }
 }

@@ -149,16 +149,8 @@ pub(crate) fn build_session(
     let (provider_names, used_cuda) = resolve_provider_names(device);
 
     let mut builder = oe(ort::session::Session::builder())?;
-    if let Some(level) = policy.opt_level {
-        builder = oe(builder.with_optimization_level(level))?;
-    }
-    if let Some(n) = policy.intra_threads {
-        builder = oe(builder.with_intra_threads(n))?;
-    }
-    if let Some(n) = policy.inter_threads {
-        builder = oe(builder.with_inter_threads(n))?;
-    }
-    builder = apply_providers(builder, &provider_names)?;
+    builder = policy.apply(builder)?;
+    builder = apply_providers(builder, &provider_names);
     let session = oe(builder.commit_from_file(onnx_path))
         .map_err(|e| anyhow!("loading {}: {e:#}", onnx_path.display()))?;
 
