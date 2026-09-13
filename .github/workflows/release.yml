@@ -66,6 +66,7 @@ jobs:
             target: x64
           - runner: macos-latest
             target: aarch64
+        python-version: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.platform.runner }}
     permissions:
       id-token: write # PyPI trusted publishing
@@ -76,7 +77,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --locked --features extension-module
+          args: --release --out dist --locked --features extension-module --interpreter python${{ matrix.python-version }}
           # 2_28, not auto: auto resolves to CentOS 7-based manylinux2014
           # (OpenSSL 1.0.2 < openssl-sys minimum 1.1.0). Ignored on win/mac.
           manylinux: ${{ matrix.platform.manylinux || '2_28' }}
@@ -89,7 +90,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v6
         with:
-          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}-py${{ matrix.python-version }}
           path: dist
 
   # ------------------------------------------------------------------

@@ -33,6 +33,8 @@ def main() -> int:
     pyproject_text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     if 'readme = "README.md"' not in pyproject_text:
         failures.append("pyproject.toml does not declare readme = \"README.md\"")
+    if 'requires-python = ">=3.11"' not in pyproject_text:
+        failures.append('pyproject.toml requires-python must be ">=3.11" (wheel matrix 3.11–3.13)')
 
     cargo_text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     for field in ('readme = "README.md"', 'license = "MIT OR Apache-2.0"',

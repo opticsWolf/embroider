@@ -25,7 +25,7 @@ index, so the design is fail-fast instead.
 
 ## Install
 
-PyPI wheels (Linux / Windows / macOS-arm64, Python 3.10+) — `okfgraph`
+PyPI wheels (Linux / Windows / macOS-arm64, Python 3.11+) — `okfgraph`
 pulls it in automatically; standalone:
 
 ```bash
