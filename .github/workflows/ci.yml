@@ -17,3 +17,14 @@ jobs:
       - run: cargo check --locked
       # The wheel path (pyo3 bindings) must still compile.
       - run: cargo check --locked --features extension-module
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      # Versions lock-step + readme/license metadata — fails CI before any
+      # tag can (the OKFgraph test_packaging.py lesson).
+      - run: python scripts/check_packaging.py
