@@ -5,6 +5,14 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-09-13
+
+### Fixed
+- `cuda_available()` is panic-free when no ORT dylib is resolvable: ort
+  load-dynamic panics on first API use (`.expect`ed init); the probe now
+  contains it and reports "no CUDA". Bobine's suite surfaced this — its
+  table-slot test runs without a dylib.
+
 ## [0.1.2] — 2026-09-13
 
 ### Changed

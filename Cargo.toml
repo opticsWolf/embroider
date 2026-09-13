@@ -1,6 +1,6 @@
 [package]
 name = "embroider"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Text embroidery: Jina v5 text embeddings via ONNX Runtime (Rust core, optional PyO3 bindings) — shared by bobine and okfgraph"
 readme = "README.md"
