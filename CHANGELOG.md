@@ -5,6 +5,27 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-09-14
+
+### Added
+- Weight precision selection: `JinaV5::open` (and the Python `precision`
+  kwarg, default `None` = `auto`) accepts `fp32` / `fp16`. `auto` follows
+  the *resolved* device (CUDA → FP16, CPU → FP32), so CUDA-requested-
+  but-missing degrades to FP32 weights instead of stranding FP16 on CPU
+  (FP16-on-CPU runs >40x slower than FP32-CPU — measured). `fp16` maps
+  the default model id to the published FP16 mirror repo
+  (`opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16`);
+  explicit model ids (omni tower, mirrors) always win untouched, and
+  explicit files bypass selection (they report `fp32`). An explicit
+  `fp16`-on-CPU warns loudly but is honoured. The session exposes its
+  effective precision (`.precision` / `precision()`).
+- CPU-arena control: `open` / `open_files` (and the Python `cpu_arena`
+  kwarg, default `False`) disable the CPU arena allocator — measured 8x
+  lower peak RSS (15.3 → 1.9 GB on FP32) for ~1.4x encode time.
+  `apply_providers` keeps its exact historical behaviour (arena on);
+  the new `apply_providers_with_arena` carries the flag, retrying
+  CPU-only on accelerator failure so the flag survives fallback.
+
 ## [0.1.4] — 2026-09-13
 
 ### Added

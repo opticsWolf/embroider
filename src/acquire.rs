@@ -6,8 +6,30 @@
 //! work without opening an ONNX session (lazy encoder lifecycle).
 
 use crate::error::Result;
+use crate::policy::Precision;
 use anyhow::anyhow;
 use std::path::PathBuf;
+
+/// Default FP32 weights (Jina's official optimum export).
+pub const FP32_TEXT_MODEL: &str = "jinaai/jina-embeddings-v5-text-small-retrieval";
+/// FP16 mirror of the same export (same graph + contract, weights cast
+/// FP32→FP16, IO kept FP32). Published alongside the quant-spike results;
+/// CUDA-only by design (FP16 on CPU runs >40x slower than FP32-CPU).
+pub const FP16_TEXT_MODEL: &str =
+    "opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16";
+
+/// Select the acquisition repo for a precision request. The mapping
+/// applies ONLY to the default FP32 id: an explicit `model_id` (custom
+/// repo, omni tower, local mirror) always wins untouched, so non-text
+/// models can never be redirected at FP16 weights. `Auto` must already
+/// be resolved via `Precision::resolve` before calling.
+pub fn repo_for_precision(model_id: &str, precision: Precision) -> &str {
+    if model_id == FP32_TEXT_MODEL && precision == Precision::Fp16 {
+        FP16_TEXT_MODEL
+    } else {
+        model_id
+    }
+}
 
 /// Split an `owner/name` model id — validated before any network access.
 pub fn parse_owner_name(model_id: &str) -> Result<(String, String)> {
@@ -63,5 +85,29 @@ mod tests {
     fn parse_owner_name_rejects_bare_id() {
         let err = parse_owner_name("no-slash").unwrap_err().to_string();
         assert!(err.contains("model_id must be 'owner/name'"), "{err}");
+    }
+
+    #[test]
+    fn repo_selection_maps_default_id_to_fp16() {
+        assert_eq!(
+            repo_for_precision(FP32_TEXT_MODEL, Precision::Fp16),
+            FP16_TEXT_MODEL
+        );
+        assert_eq!(
+            repo_for_precision(FP32_TEXT_MODEL, Precision::Fp32),
+            FP32_TEXT_MODEL
+        );
+    }
+
+    #[test]
+    fn repo_selection_never_redirects_explicit_ids() {
+        // Omni tower, custom repos, mirrors: precision is moot, the id wins.
+        for id in [
+            "jinaai/jina-embeddings-v5-omni-small-retrieval",
+            "someone/custom-embed",
+        ] {
+            assert_eq!(repo_for_precision(id, Precision::Fp16), id);
+            assert_eq!(repo_for_precision(id, Precision::Auto), id);
+        }
     }
 }

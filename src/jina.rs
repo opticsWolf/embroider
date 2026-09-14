@@ -10,10 +10,14 @@
 //! `text_embed()` tuning); device fallback semantics mirror bobine and the
 //! Python router: CUDA is opportunistic, never fatal.
 
-use crate::acquire::{fetch_tokenizer_file, hf_client, parse_owner_name};
+use crate::acquire::{
+    fetch_tokenizer_file, hf_client, parse_owner_name, repo_for_precision,
+};
 use crate::error::{oe, Result};
-use crate::policy::{resolve_provider_names, DeviceReq, SessionPolicy};
-use crate::providers::apply_providers;
+use crate::policy::{
+    resolve_provider_names, DeviceReq, Precision, SessionPolicy,
+};
+use crate::providers::apply_providers_with_arena;
 use anyhow::anyhow;
 use ndarray::{Array1, Array2};
 use ort::session::Session;
@@ -167,16 +171,19 @@ pub(crate) struct LoadedSession {
 
 /// Build + contract-check a session from an ONNX file already on disk.
 /// No network access: the caller owns acquisition (HF fetch or explicit path).
+/// `cpu_arena=false` (the JinaV5 default) disables the CPU arena allocator:
+/// 8x lower peak RSS for ~1.4x encode time, measured on the FP32 text model.
 pub(crate) fn build_session(
     onnx_path: &Path,
     device: DeviceReq,
     policy: &SessionPolicy,
+    cpu_arena: bool,
 ) -> Result<LoadedSession> {
     let (provider_names, used_cuda) = resolve_provider_names(device);
 
     let mut builder = oe(ort::session::Session::builder())?;
     builder = policy.apply(builder)?;
-    builder = apply_providers(builder, &provider_names);
+    builder = apply_providers_with_arena(builder, &provider_names, cpu_arena);
     let session = oe(builder.commit_from_file(onnx_path))
         .map_err(|e| anyhow!("loading {}: {e:#}", onnx_path.display()))?;
 
@@ -213,11 +220,13 @@ pub struct JinaV5 {
     max_len: usize,
     model_id: String,
     used_cuda: bool,
+    precision: Precision,
     feed_token_type_ids: bool,
     output_name: String,
 }
 
 impl JinaV5 {
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         model_id: &str,
         revision: Option<&str>,
@@ -225,12 +234,32 @@ impl JinaV5 {
         truncate_dim: usize,
         device: DeviceReq,
         max_length: Option<usize>,
+        precision: Precision,
+        cpu_arena: bool,
     ) -> Result<Self> {
         check_truncate_dim(truncate_dim)?;
         let max_length = check_max_length(max_length)?;
 
+        // Resolve the device BEFORE acquisition: precision follows the
+        // device the session will actually land on, so CUDA-requested-
+        // but-missing degrades to FP32 weights instead of stranding
+        // FP16 on CPU. (`resolve_provider_names` is OnceLock-cached;
+        // `build_session` re-resolves for free.)
+        let (_, used_cuda) = resolve_provider_names(device);
+        let precision = precision.resolve(used_cuda);
+        if precision == Precision::Fp16 && !used_cuda {
+            eprintln!(
+                "embroider: FP16 weights on CPU — this runs >40x slower than FP32-CPU \
+                 (emulated half-precision kernels). Explicit request honoured; pass \
+                 precision='fp32' (or 'auto') for CPU sessions."
+            );
+        }
+        // Precision selects the acquisition repo — but only for the
+        // default FP32 id. Explicit ids (omni tower, mirrors) win untouched.
+        let repo_id = repo_for_precision(model_id, precision);
+
         // ---- model acquisition (optimum `subfolder="onnx"` layout) ----
-        let (owner, name) = parse_owner_name(model_id)?;
+        let (owner, name) = parse_owner_name(repo_id)?;
         let client = hf_client(cache_dir.clone())?;
         let repo = client.model(owner, name);
         let rev = revision.map(str::to_string);
@@ -239,7 +268,7 @@ impl JinaV5 {
             .filename("onnx/model.onnx".to_string())
             .maybe_revision(rev.clone())
             .send()
-            .map_err(|e| anyhow!("onnx/model.onnx missing for '{model_id}': {e}"))?;
+            .map_err(|e| anyhow!("onnx/model.onnx missing for '{repo_id}': {e}"))?;
         // External-data sidecar must sit next to model.onnx; the hub cache
         // layout preserves that, so a plain fetch into the same dir suffices.
         if repo
@@ -252,10 +281,11 @@ impl JinaV5 {
             eprintln!("embroider: no onnx/model.onnx_data sidecar; assuming inline weights");
         }
         // ---- tokenizer (no padding here; single-doc encodes need none) ----
-        let tok_path = fetch_tokenizer_file(model_id, revision, cache_dir)?;
+        let tok_path = fetch_tokenizer_file(repo_id, revision, cache_dir)?;
         let tokenizer = load_tokenizer(&tok_path, Some(max_length))?;
 
-        let loaded = build_session(&onnx_path, device, &SessionPolicy::text_embed())?;
+        let loaded =
+            build_session(&onnx_path, device, &SessionPolicy::text_embed(), cpu_arena)?;
 
         Ok(Self {
             session: RwLock::new(loaded.session),
@@ -264,6 +294,7 @@ impl JinaV5 {
             max_len: max_length,
             model_id: model_id.to_string(),
             used_cuda: loaded.used_cuda,
+            precision,
             feed_token_type_ids: loaded.feed_token_type_ids,
             output_name: loaded.output_name,
         })
@@ -273,12 +304,17 @@ impl JinaV5 {
     /// sidecar must sit next to `onnx_path` (ORT resolves it relative to the
     /// model file, same as the HF cache layout). Missing files fail before
     /// any tokenizer or session work.
+    /// Load from explicit local files — no network access. Precision
+    /// selection does not apply here (the files are what they are); the
+    /// reported precision reads `fp32` and callers that need FP16 weights
+    /// pass the FP16 files explicitly.
     pub fn open_files(
         onnx_path: &Path,
         tokenizer_path: &Path,
         truncate_dim: usize,
         device: DeviceReq,
         max_length: Option<usize>,
+        cpu_arena: bool,
     ) -> Result<Self> {
         check_truncate_dim(truncate_dim)?;
         let max_length = check_max_length(max_length)?;
@@ -292,7 +328,8 @@ impl JinaV5 {
             ));
         }
         let tokenizer = load_tokenizer(tokenizer_path, Some(max_length))?;
-        let loaded = build_session(onnx_path, device, &SessionPolicy::text_embed())?;
+        let loaded =
+            build_session(onnx_path, device, &SessionPolicy::text_embed(), cpu_arena)?;
         Ok(Self {
             session: RwLock::new(loaded.session),
             tokenizer,
@@ -300,6 +337,7 @@ impl JinaV5 {
             max_len: max_length,
             model_id: onnx_path.display().to_string(),
             used_cuda: loaded.used_cuda,
+            precision: Precision::Fp32,
             feed_token_type_ids: loaded.feed_token_type_ids,
             output_name: loaded.output_name,
         })
@@ -383,6 +421,12 @@ impl JinaV5 {
     /// Whether the session actually runs on CUDA.
     pub fn used_cuda(&self) -> bool {
         self.used_cuda
+    }
+
+    /// Weight precision the session was opened with (`auto` already
+    /// resolved against the landed device). Explicit files report `fp32`.
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     /// Token count without special tokens — replaces
@@ -487,6 +531,7 @@ mod tests {
             0,
             DeviceReq::Cpu,
             None,
+            false,
         ).err().expect("open_files should fail").to_string();
         assert!(e.contains("1..=1024"), "{e}");
     }
@@ -500,6 +545,7 @@ mod tests {
                 512,
                 DeviceReq::Cpu,
                 bad,
+                false,
             ).err().expect("open_files should fail").to_string();
             assert!(e.contains("1..=32768"), "{bad:?}: {e}");
         }
@@ -522,6 +568,7 @@ mod tests {
             512,
             DeviceReq::Cpu,
             None,
+            false,
         ).err().expect("open_files should fail").to_string();
         assert!(e.contains("onnx model not found"), "{e}");
     }
@@ -540,20 +587,22 @@ mod tests {
         for bad in [0usize, 2048] {
             let e = JinaV5::open(
                 "jinaai/jina-embeddings-v5-text-small-retrieval",
-                None, None, bad, DeviceReq::Cpu, None,
+                None, None, bad, DeviceReq::Cpu, None, Precision::Auto, false,
             ).err().expect("open should fail").to_string();
             assert!(e.contains("1..=1024"), "dim {bad}: {e}");
         }
         let e = JinaV5::open(
             "jinaai/jina-embeddings-v5-text-small-retrieval",
-            None, None, 16, DeviceReq::Cpu, None,
+            None, None, 16, DeviceReq::Cpu, None, Precision::Auto, false,
         ).err().expect("open should fail").to_string();
         assert!(e.contains(">= 32"), "{e}");
     }
 
     #[test]
     fn open_rejects_unqualified_model_id_before_io() {
-        let e = JinaV5::open("no-slash", None, None, 512, DeviceReq::Cpu, None)
+        let e = JinaV5::open(
+            "no-slash", None, None, 512, DeviceReq::Cpu, None, Precision::Auto, false,
+        )
             .err().expect("open should fail")
             .to_string();
         assert!(e.contains("model_id must be 'owner/name'"), "{e}");

@@ -29,12 +29,17 @@ pub mod policy;
 pub mod probe;
 pub mod providers;
 
-pub use acquire::{fetch_tokenizer_file, parse_owner_name};
+pub use acquire::{
+    fetch_tokenizer_file, parse_owner_name, repo_for_precision,
+    FP16_TEXT_MODEL, FP32_TEXT_MODEL,
+};
 pub use diag::{report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
-pub use policy::{DeviceReq, SessionPolicy};
+pub use policy::{DeviceReq, Precision, SessionPolicy};
 pub use probe::cuda_available;
-pub use providers::{apply_providers, map_provider, ProviderMapping};
+pub use providers::{
+    apply_providers, apply_providers_with_arena, map_provider, ProviderMapping,
+};
 
 // ---------------------------------------------------------------------------
 // PyO3 surface
@@ -55,7 +60,7 @@ struct PyJinaV5 {
 #[pymethods]
 impl PyJinaV5 {
     #[staticmethod]
-    #[pyo3(signature = (model_id, revision=None, cache_dir=None, truncate_dim=512, device="auto", max_length=None))]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, truncate_dim=512, device="auto", max_length=None, precision=None, cpu_arena=false))]
     fn open(
         model_id: &str,
         revision: Option<String>,
@@ -63,7 +68,14 @@ impl PyJinaV5 {
         truncate_dim: usize,
         device: &str,
         max_length: Option<usize>,
+        precision: Option<&str>,
+        cpu_arena: bool,
     ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
         let inner = JinaV5::open(
             model_id,
             revision.as_deref(),
@@ -72,19 +84,22 @@ impl PyJinaV5 {
             DeviceReq::parse(device)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
             max_length,
+            precision,
+            cpu_arena,
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
         Ok(Self { inner })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (onnx_path, tokenizer_path, truncate_dim=512, device="auto", max_length=None))]
+    #[pyo3(signature = (onnx_path, tokenizer_path, truncate_dim=512, device="auto", max_length=None, cpu_arena=false))]
     fn open_files(
         onnx_path: &str,
         tokenizer_path: &str,
         truncate_dim: usize,
         device: &str,
         max_length: Option<usize>,
+        cpu_arena: bool,
     ) -> PyResult<Self> {
         let inner = JinaV5::open_files(
             std::path::Path::new(onnx_path),
@@ -93,6 +108,7 @@ impl PyJinaV5 {
             DeviceReq::parse(device)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
             max_length,
+            cpu_arena,
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
         Ok(Self { inner })
@@ -139,6 +155,11 @@ impl PyJinaV5 {
     #[getter]
     fn max_length(&self) -> usize {
         self.inner.max_len()
+    }
+
+    #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
     }
 
     fn count_tokens(&self, text: &str) -> PyResult<usize> {

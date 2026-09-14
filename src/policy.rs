@@ -78,6 +78,58 @@ impl SessionPolicy {
     }
 }
 
+/// Weight precision request. `Auto` follows the *resolved* device
+/// (CUDA → FP16, CPU → FP32) so a flat default can never land the
+/// FP16-weights-on-CPU combination, which runs >40x slower than FP32-CPU
+/// (emulated half-precision kernels — measured, not theorised). Explicit
+/// `Fp16` on a CPU-resolved session warns at open but is honoured: slow
+/// is not corrupt, and refusing would break heterogeneous fleets that
+/// share one config.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Precision {
+    Auto,
+    Fp32,
+    Fp16,
+}
+
+impl Precision {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "fp32" | "float32" => Ok(Self::Fp32),
+            "fp16" | "float16" => Ok(Self::Fp16),
+            other => Err(anyhow!(
+                "precision must be 'auto', 'fp32' or 'fp16', got '{other}'"
+            )),
+        }
+    }
+
+    /// Resolve against the device the session actually landed on.
+    /// Must be called with the `used_cuda` from `resolve_provider_names`
+    /// — never with the request — so CUDA-requested-but-missing
+    /// degrades to FP32 weights instead of stranding FP16 on CPU.
+    pub fn resolve(self, used_cuda: bool) -> Self {
+        match self {
+            Self::Auto => {
+                if used_cuda {
+                    Self::Fp16
+                } else {
+                    Self::Fp32
+                }
+            }
+            explicit => explicit,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Fp32 => "fp32",
+            Self::Fp16 => "fp16",
+        }
+    }
+}
+
 /// Resolve the internal provider list for a device request. Accelerators
 /// stay opportunistic: requested-but-missing warns once and degrades to CPU.
 pub(crate) fn resolve_provider_names(device: DeviceReq) -> (Vec<String>, bool) {
@@ -121,5 +173,28 @@ mod tests {
         let err = DeviceReq::parse("tpu").unwrap_err().to_string();
         assert!(err.contains("device must be"), "{err}");
         assert!(err.contains("'tpu'"), "{err}");
+    }
+
+    #[test]
+    fn precision_parse_accepts_aliases_case_insensitively() {
+        assert_eq!(Precision::parse("auto").unwrap(), Precision::Auto);
+        assert_eq!(Precision::parse("FP32").unwrap(), Precision::Fp32);
+        assert_eq!(Precision::parse("float16").unwrap(), Precision::Fp16);
+    }
+
+    #[test]
+    fn precision_parse_rejects_unknown_with_message() {
+        let err = Precision::parse("int8").unwrap_err().to_string();
+        assert!(err.contains("precision must be"), "{err}");
+        assert!(err.contains("'int8'"), "{err}");
+    }
+
+    #[test]
+    fn precision_auto_follows_resolved_device() {
+        assert_eq!(Precision::Auto.resolve(true), Precision::Fp16);
+        assert_eq!(Precision::Auto.resolve(false), Precision::Fp32);
+        // Explicit survives resolution untouched — even the slow combo.
+        assert_eq!(Precision::Fp16.resolve(false), Precision::Fp16);
+        assert_eq!(Precision::Fp32.resolve(true), Precision::Fp32);
     }
 }
