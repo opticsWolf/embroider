@@ -27,7 +27,7 @@ embroider errors loudly rather than quietly mixing vector spaces.
 
 ## Install
 
-PyPI wheels (Linux / Windows / macOS-arm64, Python 3.11+) — `okfgraph`
+PyPI wheels (Linux / Windows / macOS-arm64, Python 3.11–3.13) — `okfgraph`
 pulls it in automatically; standalone:
 
 ```bash
@@ -46,10 +46,10 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 
 | Module | Role |
 |---|---|
-| `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application |
+| `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application (`apply_providers` = arena on; `apply_providers_with_arena` carries the flag) |
 | `probe` | corrected CUDA availability check (`OnceLock`-cached) |
-| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + explicit `SessionPolicy` (`text_embed()` vs `ort_defaults()`) |
-| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch |
+| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`) + explicit `SessionPolicy` (`text_embed()` vs `ort_defaults()`) |
+| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
 | `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
 | `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
@@ -75,19 +75,50 @@ validates the wheel import and device string eagerly, but the session
 opens on the first real encode — PPR search, budgeted reads, diff, and
 doctor stay cold.
 
+`JinaV5.open(model_id, revision=None, cache_dir=None, truncate_dim=512,
+device="auto", max_length=None, precision=None, cpu_arena=False)`:
+`max_length` caps encodes at 1..=32768 (`None` = 8192 compat default;
+`.max_length` reports the effective limit), `precision` selects weights
+(`auto`/`fp32`/`fp16`, `None` = `auto`; `.precision` reports the
+effective choice), `cpu_arena=False` disables the CPU arena allocator
+(8x lower peak RSS for ~1.4x encode time, measured on the FP32 text
+model).
+
 `JinaTokenizer.open` fetches only `tokenizer.json` for exact token counts
-without the session. The truncation policy is shared, so counts are
-identical to the session path (verified). A failed session open is cached
-and re-raised — configuration errors fail fast once, not once per encode.
+without the session. It never truncates, so counts report true length —
+`JinaV5.count_tokens()` instead reflects the session's `max_length`.
+A failed session open is cached and re-raised — configuration errors fail
+fast once, not once per encode.
+
+### Weight precision (`auto` by default)
+
+`auto` follows the *resolved* device (CUDA → FP16, CPU → FP32), so
+CUDA-requested-but-missing degrades to FP32 weights instead of stranding
+FP16 on CPU (FP16-on-CPU runs >40x slower than FP32-CPU — measured).
+`fp16` maps the default model id to the published FP16 mirror repo
+(`opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16`);
+explicit model ids (omni tower, mirrors) always win untouched. An explicit
+`fp16`-on-CPU warns loudly but is honoured. Do not mix precisions in one
+index — FP32 vs FP16 weights shift vectors, same as mixing tuning levels.
+
+### Memory: CPU arena off by default
+
+`cpu_arena=False` registers the CPU execution provider explicitly with
+its arena allocator disabled — measured 8x lower peak RSS (15.3 → 1.9 GB
+on FP32) for ~1.4x encode time. Pass `True` only when peak throughput
+beats memory pressure.
 
 ### Explicit local files (air-gapped)
 
-`JinaV5.open_files(onnx_path, tokenizer_path)` and
+`JinaV5.open_files(onnx_path, tokenizer_path, truncate_dim=512,
+device="auto", max_length=None, cpu_arena=False)` and
 `JinaTokenizer.open_files(tokenizer_path)` skip every download. The
 sidecar (`model.onnx_data`-style) must sit next to the ONNX file — ORT
 resolves it relative to the model path, same as the HF cache layout.
-OKFgraph's `OKFRouter(model_path=..., tokenizer_path=...)` uses them
-(both or neither; missing files raise `FileNotFoundError` at
+Precision selection does not apply here — the files are what they are
+(reported precision reads `fp32`; pass FP16 files explicitly for FP16
+weights). OKFgraph's `OKFRouter(model_path=..., tokenizer_path=...)`
+uses them (both or neither; missing files raise `FileNotFoundError` at
 construction). Same bytes in → same vectors out (test-pinned against HF
 acquisition).
 
@@ -134,7 +165,7 @@ shutdown (fallout from ort's exit handler, not the root cause). Point
 | Level | Behaviour |
 |---|---|
 | Install | The wheel is a core dependency of the consumer; if it is missing or fails to import, the consumer raises a clear `RuntimeError` with the install hint — never an `ImportError` from deep inside, never a silent fallback. |
-| Device | Accelerators are opportunistic: `auto`/`cuda` use CUDA when the loaded ORT registers the EP, else warn (stderr) + CPU. `used_cuda` reports the outcome. Never fatal. Unknown provider names warn and are skipped; registration failure degrades to CPU. |
+| Device | Accelerators are opportunistic: `auto`/`cuda` use CUDA when the loaded ORT registers the EP, else warn (stderr) + CPU. `used_cuda` reports the outcome. Never fatal. Unknown provider names warn and are skipped; registration failure degrades to CPU. `precision='auto'` follows the landed device (CUDA→FP16, CPU→FP32); explicit `fp16`-on-CPU warns but is honoured. |
 | Encode | **Fail fast.** No fallback at encode time — vectors must stay bit-comparable within one index. |
 | Tokenizer | No transformers in the runtime path, anywhere: internal tokenize + `count_tokens()` (== `tokenizer.encode(t, add_special_tokens=False)`) feed the context-window guard. |
 
@@ -144,7 +175,11 @@ shutdown (fallout from ort's exit handler, not the root cause). Point
   `token_type_ids` fed only if declared — v5's export doesn't declare it,
   which is where generic runners fail). Output prefers `last_hidden_state`.
 - `truncate_dim` validated (32–1024, warning off the Matryoshka ladder).
-  `MAX_LENGTH` (8192) is exposed for the window guard.
+  `max_length` validated (1..=32768, `None` = 8192 compat default);
+  `MAX_LENGTH` / `MODEL_MAX_TOKENS` are exposed for the window guard.
+  Same (text, `max_length`) → same vector; short inputs are bit-identical
+  at any limit, while longer inputs change once the old truncation lifts.
+  A 32K-token forward is O(n²) memory — size the limit to the machine.
 - Batch encoding is sequential by design (padded batches waste attention
   compute on variable-length docs). GIL is released during encode.
 - `input_ids`/`attention_mask` feed as int64; pooling takes the last
@@ -155,18 +190,21 @@ shutdown (fallout from ort's exit handler, not the root cause). Point
 `fixtures/golden_jina_v5_text_small.json` pins the frozen vector space:
 4 canonical texts × Query/Document prefixes × dims 64/512 (12 vectors) +
 exact token counts, generated with embroider 0.1.3 / onnxruntime 1.29.0
-CPU / text-embed policy. Consumers vendor this file and assert live
-vectors against it (`abs=1e-6` — catches wrong model, pooling, prefix,
-or truncation; immune to cross-CPU noise). Regenerate only on an
+CPU / text-embed policy. Unchanged by 0.1.4 (`max_length`) and 0.1.5
+(`precision`, `cpu_arena`) for short inputs at defaults. Consumers vendor
+this file and assert live vectors against it (`abs=1e-6` — catches wrong
+model, pooling, prefix, or truncation; immune to cross-CPU noise). Regenerate only on an
 intentional contract change, which is a new minor version plus a
 re-index-everything notice. See `COMPAT.md` for the release matrix.
 
 ## Testing
 
-- **Rust unit tests** (21, pure — no network, no dylib, no tokenizer
-  file): device parsing, model-id parsing, provider-matrix mapping,
+- **Rust unit tests** (28, pure — no network, no dylib, no tokenizer
+  file): device/precision parsing, precision-follows-device resolution,
+  FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,
-  contract constants, and `open()` validation firing before I/O.
+  contract constants, and `open()`/`open_files()` validation (dims,
+  `max_length`) firing before I/O.
 
   ```bash
   cargo test --locked
