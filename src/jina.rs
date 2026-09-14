@@ -1,7 +1,7 @@
 //! The Jina v5 text-embedding contract.
 //!
 //! Exact port of `okfgraph.components.embedding.EmbeddingEngine._encode`:
-//! task prefix → tokenize (8192) → ONNX forward → **last-token pooling** → L2
+//! task prefix → tokenize (session `max_length`, default 8192) → ONNX forward → **last-token pooling** → L2
 //! → Matryoshka truncate → re-normalise. Any deviation here silently moves the
 //! unified text/omni vector space, so the parity harness in the consumers pins
 //! this at ≤1e-5.
@@ -21,7 +21,13 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-/// Hard truncation limit, mirroring `tokenizer(..., max_length=8192)`.
+/// Model ceiling: Qwen3 `max_position_embeddings` from the v5 config —
+/// the longest input the weights can positionally represent.
+pub const MODEL_MAX_TOKENS: usize = 32768;
+/// Default truncation limit (compat): the historical
+/// `tokenizer(..., max_length=8192)` policy, kept so existing graphs keep
+/// bit-identical vectors unless the caller opts into more context.
+/// Pass `max_length` explicitly (up to MODEL_MAX_TOKENS) to use it.
 pub const MAX_LENGTH: usize = 8192;
 /// Native width of jina-embeddings-v5 outputs.
 pub const NATIVE_DIM: usize = 1024;
@@ -74,16 +80,36 @@ pub(crate) fn check_truncate_dim(truncate_dim: usize) -> Result<()> {
     Ok(())
 }
 
-/// Load a tokenizer with the Jina 8192-token truncation policy.
-pub(crate) fn load_tokenizer(tok_path: &std::path::Path) -> Result<tokenizers::Tokenizer> {
+/// Validate an optional token limit before any I/O: None selects the
+/// compat default (MAX_LENGTH); Some(n) must fit the model's ceiling.
+/// Returns the effective limit.
+pub(crate) fn check_max_length(max_length: Option<usize>) -> Result<usize> {
+    match max_length {
+        None => Ok(MAX_LENGTH),
+        Some(n) if (1..=MODEL_MAX_TOKENS).contains(&n) => Ok(n),
+        Some(n) => Err(anyhow!(
+            "max_length must be within 1..={MODEL_MAX_TOKENS} (Qwen3 position ceiling), got {n}"
+        )),
+    }
+}
+
+/// Load a tokenizer with the given truncation policy. `None` disables
+/// truncation (counting handle: counts report true length); `Some(n)`
+/// caps encodes at n tokens (session handle: bounds the forward pass).
+pub(crate) fn load_tokenizer(
+    tok_path: &std::path::Path,
+    max_length: Option<usize>,
+) -> Result<tokenizers::Tokenizer> {
     let mut tokenizer = tokenizers::Tokenizer::from_file(tok_path)
         .map_err(|e| anyhow!("tokenizer.json failed to load: {e}"))?;
-    tokenizer
-        .with_truncation(Some(tokenizers::TruncationParams {
-            max_length: MAX_LENGTH,
-            ..Default::default()
-        }))
-        .map_err(|e| anyhow!("truncation setup failed: {e}"))?;
+    if let Some(n) = max_length {
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: n,
+                ..Default::default()
+            }))
+            .map_err(|e| anyhow!("truncation setup failed: {e}"))?;
+    }
     Ok(tokenizer)
 }
 
@@ -111,7 +137,7 @@ impl TokenizerHandle {
         cache_dir: Option<PathBuf>,
     ) -> Result<Self> {
         let tok_path = fetch_tokenizer_file(model_id, revision, cache_dir)?;
-        Ok(Self { tokenizer: load_tokenizer(&tok_path)? })
+        Ok(Self { tokenizer: load_tokenizer(&tok_path, None)? })
     }
 
     pub fn open_files(tokenizer_path: &Path) -> Result<Self> {
@@ -121,7 +147,7 @@ impl TokenizerHandle {
                 tokenizer_path.display()
             ));
         }
-        Ok(Self { tokenizer: load_tokenizer(tokenizer_path)? })
+        Ok(Self { tokenizer: load_tokenizer(tokenizer_path, None)? })
     }
 
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
@@ -184,6 +210,7 @@ pub struct JinaV5 {
     session: RwLock<Session>,
     tokenizer: tokenizers::Tokenizer,
     dim: usize,
+    max_len: usize,
     model_id: String,
     used_cuda: bool,
     feed_token_type_ids: bool,
@@ -197,8 +224,10 @@ impl JinaV5 {
         cache_dir: Option<PathBuf>,
         truncate_dim: usize,
         device: DeviceReq,
+        max_length: Option<usize>,
     ) -> Result<Self> {
         check_truncate_dim(truncate_dim)?;
+        let max_length = check_max_length(max_length)?;
 
         // ---- model acquisition (optimum `subfolder="onnx"` layout) ----
         let (owner, name) = parse_owner_name(model_id)?;
@@ -223,9 +252,8 @@ impl JinaV5 {
             eprintln!("embroider: no onnx/model.onnx_data sidecar; assuming inline weights");
         }
         // ---- tokenizer (no padding here; single-doc encodes need none) ----
-        // Shared with TokenizerHandle so both paths load identical truncation.
         let tok_path = fetch_tokenizer_file(model_id, revision, cache_dir)?;
-        let tokenizer = load_tokenizer(&tok_path)?;
+        let tokenizer = load_tokenizer(&tok_path, Some(max_length))?;
 
         let loaded = build_session(&onnx_path, device, &SessionPolicy::text_embed())?;
 
@@ -233,6 +261,7 @@ impl JinaV5 {
             session: RwLock::new(loaded.session),
             tokenizer,
             dim: truncate_dim,
+            max_len: max_length,
             model_id: model_id.to_string(),
             used_cuda: loaded.used_cuda,
             feed_token_type_ids: loaded.feed_token_type_ids,
@@ -249,8 +278,10 @@ impl JinaV5 {
         tokenizer_path: &Path,
         truncate_dim: usize,
         device: DeviceReq,
+        max_length: Option<usize>,
     ) -> Result<Self> {
         check_truncate_dim(truncate_dim)?;
+        let max_length = check_max_length(max_length)?;
         if !onnx_path.is_file() {
             return Err(anyhow!("onnx model not found: {}", onnx_path.display()));
         }
@@ -260,12 +291,13 @@ impl JinaV5 {
                 tokenizer_path.display()
             ));
         }
-        let tokenizer = load_tokenizer(tokenizer_path)?;
+        let tokenizer = load_tokenizer(tokenizer_path, Some(max_length))?;
         let loaded = build_session(onnx_path, device, &SessionPolicy::text_embed())?;
         Ok(Self {
             session: RwLock::new(loaded.session),
             tokenizer,
             dim: truncate_dim,
+            max_len: max_length,
             model_id: onnx_path.display().to_string(),
             used_cuda: loaded.used_cuda,
             feed_token_type_ids: loaded.feed_token_type_ids,
@@ -336,6 +368,11 @@ impl JinaV5 {
     /// Configured output dimension (post-Matryoshka).
     pub fn dim(&self) -> usize {
         self.dim
+    }
+
+    /// Effective token limit (truncation ceiling for encodes).
+    pub fn max_len(&self) -> usize {
+        self.max_len
     }
 
     /// Model id — or the ONNX path when opened via `open_files`.
@@ -449,8 +486,32 @@ mod tests {
             Path::new("/nonexistent/tokenizer.json"),
             0,
             DeviceReq::Cpu,
+            None,
         ).err().expect("open_files should fail").to_string();
         assert!(e.contains("1..=1024"), "{e}");
+    }
+
+    #[test]
+    fn open_files_rejects_bad_max_length_before_io() {
+        for bad in [Some(0usize), Some(MODEL_MAX_TOKENS + 1)] {
+            let e = JinaV5::open_files(
+                Path::new("/nonexistent/model.onnx"),
+                Path::new("/nonexistent/tokenizer.json"),
+                512,
+                DeviceReq::Cpu,
+                bad,
+            ).err().expect("open_files should fail").to_string();
+            assert!(e.contains("1..=32768"), "{bad:?}: {e}");
+        }
+    }
+
+    #[test]
+    fn check_max_length_defaults_and_bounds() {
+        assert_eq!(check_max_length(None).unwrap(), MAX_LENGTH);
+        assert_eq!(check_max_length(Some(8192)).unwrap(), 8192);
+        assert_eq!(check_max_length(Some(MODEL_MAX_TOKENS)).unwrap(), MODEL_MAX_TOKENS);
+        assert!(check_max_length(Some(0)).is_err());
+        assert!(check_max_length(Some(MODEL_MAX_TOKENS + 1)).is_err());
     }
 
     #[test]
@@ -460,6 +521,7 @@ mod tests {
             Path::new("/nonexistent/tokenizer.json"),
             512,
             DeviceReq::Cpu,
+            None,
         ).err().expect("open_files should fail").to_string();
         assert!(e.contains("onnx model not found"), "{e}");
     }
@@ -478,20 +540,20 @@ mod tests {
         for bad in [0usize, 2048] {
             let e = JinaV5::open(
                 "jinaai/jina-embeddings-v5-text-small-retrieval",
-                None, None, bad, DeviceReq::Cpu,
+                None, None, bad, DeviceReq::Cpu, None,
             ).err().expect("open should fail").to_string();
             assert!(e.contains("1..=1024"), "dim {bad}: {e}");
         }
         let e = JinaV5::open(
             "jinaai/jina-embeddings-v5-text-small-retrieval",
-            None, None, 16, DeviceReq::Cpu,
+            None, None, 16, DeviceReq::Cpu, None,
         ).err().expect("open should fail").to_string();
         assert!(e.contains(">= 32"), "{e}");
     }
 
     #[test]
     fn open_rejects_unqualified_model_id_before_io() {
-        let e = JinaV5::open("no-slash", None, None, 512, DeviceReq::Cpu)
+        let e = JinaV5::open("no-slash", None, None, 512, DeviceReq::Cpu, None)
             .err().expect("open should fail")
             .to_string();
         assert!(e.contains("model_id must be 'owner/name'"), "{e}");

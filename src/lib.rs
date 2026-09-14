@@ -31,7 +31,7 @@ pub mod providers;
 
 pub use acquire::{fetch_tokenizer_file, parse_owner_name};
 pub use diag::{report, OrtReport};
-pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, NATIVE_DIM};
+pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
 pub use policy::{DeviceReq, SessionPolicy};
 pub use probe::cuda_available;
 pub use providers::{apply_providers, map_provider, ProviderMapping};
@@ -55,13 +55,14 @@ struct PyJinaV5 {
 #[pymethods]
 impl PyJinaV5 {
     #[staticmethod]
-    #[pyo3(signature = (model_id, revision=None, cache_dir=None, truncate_dim=512, device="auto"))]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, truncate_dim=512, device="auto", max_length=None))]
     fn open(
         model_id: &str,
         revision: Option<String>,
         cache_dir: Option<String>,
         truncate_dim: usize,
         device: &str,
+        max_length: Option<usize>,
     ) -> PyResult<Self> {
         let inner = JinaV5::open(
             model_id,
@@ -70,18 +71,20 @@ impl PyJinaV5 {
             truncate_dim,
             DeviceReq::parse(device)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
         Ok(Self { inner })
     }
 
     #[staticmethod]
-    #[pyo3(signature = (onnx_path, tokenizer_path, truncate_dim=512, device="auto"))]
+    #[pyo3(signature = (onnx_path, tokenizer_path, truncate_dim=512, device="auto", max_length=None))]
     fn open_files(
         onnx_path: &str,
         tokenizer_path: &str,
         truncate_dim: usize,
         device: &str,
+        max_length: Option<usize>,
     ) -> PyResult<Self> {
         let inner = JinaV5::open_files(
             std::path::Path::new(onnx_path),
@@ -89,6 +92,7 @@ impl PyJinaV5 {
             truncate_dim,
             DeviceReq::parse(device)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
         Ok(Self { inner })
@@ -134,7 +138,7 @@ impl PyJinaV5 {
 
     #[getter]
     fn max_length(&self) -> usize {
-        MAX_LENGTH
+        self.inner.max_len()
     }
 
     fn count_tokens(&self, text: &str) -> PyResult<usize> {
@@ -191,5 +195,6 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaTokenizer>()?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;
     m.add("MAX_LENGTH", MAX_LENGTH)?;
+    m.add("MODEL_MAX_TOKENS", MODEL_MAX_TOKENS)?;
     Ok(())
 }

@@ -5,6 +5,22 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-09-13
+
+### Added
+- Configurable token limit: `JinaV5::open` / `open_files` (and the Python
+  `max_length=None` kwarg) accept 1..=32768 (`MODEL_MAX_TOKENS`, the Qwen3
+  position ceiling from the v5 config); `None` keeps the historical 8192
+  default (`MAX_LENGTH`) so existing graphs keep bit-identical vectors.
+  Out-of-range values fail before any I/O. The session exposes its
+  effective limit (`max_len` / `.max_length`); the counting-only
+  `TokenizerHandle` no longer truncates, so counts report true length.
+
+### Notes
+- Raising the limit changes vectors for inputs longer than the old
+  truncation only; short inputs are bit-identical at any limit.
+  A 32K-token forward is O(n^2) memory — size the limit to the machine.
+
 ## [0.1.3] — 2026-09-13
 
 ### Fixed

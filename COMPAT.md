@@ -18,5 +18,10 @@ Rules:
 - **Frozen vector space**: prefixes, last-token pooling, truncation order
   never change inside a minor. A contract change is a new minor plus a
   re-index-everything notice, and the golden fixture is regenerated.
+- **Truncation limit is a parameter, not the contract** (0.1.4): same
+  (text, `max_length`) always yields the same vector; the default stays
+  8192 so existing graphs are unaffected. Raising the limit changes
+  vectors for inputs longer than the old truncation only — reimport
+  long docs after changing it, don't mix limits in one graph.
 - **Wheel matrix**: embroider ships cp311/cp312/cp313 wheels per platform;
   okfgraph requires Python ≥ 3.11, matching exactly.
