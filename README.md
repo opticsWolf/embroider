@@ -7,21 +7,23 @@
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://www.python.org/)
 [![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
 
-One embedding engine, two consumers. `embroider` turns text into vectors
-via ONNX Runtime — and, like its name in the bobine/mordant family, the
-spool feeds the loom: **bobine** (PDF/Office → Markdown) uses the ONNX
-plumbing, **okfgraph** uses the Jina v5 text-embedding contract.
+`embroider` turns text into vectors — Jina v5 embeddings served through
+ONNX Runtime from a Rust core, with optional PyO3 bindings for Python.
+One frozen contract covers the whole path: task prefix → tokenize → ONNX
+forward → last-token pooling → L2 → Matryoshka truncate → re-normalise,
+so every consumer lands in the same vector space.
 
-Provenance: a clean move out of OKFgraph's `rust/okf-embed` — an exact
-port of `EmbeddingEngine._encode`: task prefix → tokenize (8192) → ONNX
-forward → last-token pooling → L2 → Matryoshka truncate → re-normalise.
-Pinned against a numpy/transformers replication by OKFgraph's parity
-harness (`tests/test_parity.py`, max abs diff ≤ 1e-5).
+One engine, two consumers: **bobine** (PDF/Office → Markdown) reuses the
+ONNX plumbing, **okfgraph** uses the full Jina v5 text-embedding contract.
+It began as a clean move out of OKFgraph's `rust/okf-embed` — an exact
+port of `EmbeddingEngine._encode` — and stays pinned against a
+numpy/transformers replication by OKFgraph's parity harness
+(`tests/test_parity.py`, max abs diff ≤ 1e-5).
 
-**The only embedding backend.** There is no Python fallback stack, no
-`embedding_backend` selector, and no optimum/transformers in the runtime
-path — a mid-run stack switch would silently mix vector spaces in one
-index, so the design is fail-fast instead.
+Single backend, kept comparable: one lean runtime with no torch /
+transformers / optimum in the hot path, so every vector in an index stays
+directly comparable. If something can't be embedded exactly to contract,
+embroider errors loudly rather than quietly mixing vector spaces.
 
 ## Install
 
