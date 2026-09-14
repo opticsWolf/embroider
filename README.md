@@ -4,7 +4,7 @@
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
 [![docs.rs](https://img.shields.io/docsrs/embroider)](https://docs.rs/embroider)
 [![PyPI](https://img.shields.io/pypi/v/embroider)](https://pypi.org/project/embroider/)
-[![Python](https://img.shields.io/pypi/pyversions/embroider)](https://pypi.org/project/embroider/)
+[![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://www.python.org/)
 [![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
 
 One embedding engine, two consumers. `embroider` turns text into vectors
