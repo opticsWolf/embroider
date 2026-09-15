@@ -90,6 +90,12 @@ pub enum Precision {
     Auto,
     Fp32,
     Fp16,
+    /// Dynamic-int8 weights (explicit opt-in only). `Auto` never resolves
+    /// here: int8 trades speed for size on CPU (~half the tok/s of FP32)
+    /// and is a deployment choice, not a device-following default. Only
+    /// models with a MEASURED int8 artifact ship one (nano probe: rank
+    /// kept @0.99980, zero top-5 flips); unlisted pairs fall back to fp32.
+    Int8,
 }
 
 impl Precision {
@@ -98,8 +104,9 @@ impl Precision {
             "auto" => Ok(Self::Auto),
             "fp32" | "float32" => Ok(Self::Fp32),
             "fp16" | "float16" => Ok(Self::Fp16),
+            "int8" => Ok(Self::Int8),
             other => Err(anyhow!(
-                "precision must be 'auto', 'fp32' or 'fp16', got '{other}'"
+                "precision must be 'auto', 'fp32', 'fp16' or 'int8', got '{other}'"
             )),
         }
     }
@@ -126,6 +133,7 @@ impl Precision {
             Self::Auto => "auto",
             Self::Fp32 => "fp32",
             Self::Fp16 => "fp16",
+            Self::Int8 => "int8",
         }
     }
 }
@@ -184,9 +192,13 @@ mod tests {
 
     #[test]
     fn precision_parse_rejects_unknown_with_message() {
-        let err = Precision::parse("int8").unwrap_err().to_string();
+        let err = Precision::parse("int4").unwrap_err().to_string();
         assert!(err.contains("precision must be"), "{err}");
-        assert!(err.contains("'int8'"), "{err}");
+        assert!(err.contains("'int4'"), "{err}");
+        // int8 graduated from rejected to explicit opt-in (nano probe).
+        assert_eq!(Precision::parse("INT8").unwrap(), Precision::Int8);
+        assert_eq!(Precision::Int8.resolve(true), Precision::Int8);
+        assert_eq!(Precision::Int8.resolve(false), Precision::Int8);
     }
 
     #[test]

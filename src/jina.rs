@@ -11,7 +11,7 @@
 //! Python router: CUDA is opportunistic, never fatal.
 
 use crate::acquire::{
-    fetch_tokenizer_file, hf_client, parse_owner_name, repo_for_precision,
+    artifact_for, fetch_tokenizer_file, hf_client, lookup_model, parse_owner_name,
 };
 use crate::error::{oe, Result};
 use crate::policy::{
@@ -65,36 +65,57 @@ pub(crate) fn l2_truncate(pooled: &Array1<f32>, dim: usize) -> Vec<f32> {
     v
 }
 
-/// Validate the shared Matryoshka dim range before any I/O.
-pub(crate) fn check_truncate_dim(truncate_dim: usize) -> Result<()> {
-    if truncate_dim == 0 || truncate_dim > NATIVE_DIM {
+/// Validate a Matryoshka dim against one model's contract before any I/O.
+/// Unknown ids validate against the legacy (text-small) contract, which is
+/// the superset — explicit files stay model-agnostic (files are what they are).
+pub(crate) fn check_truncate_dim_for(
+    truncate_dim: usize,
+    native_dim: usize,
+    ladder: &[usize],
+) -> Result<()> {
+    if truncate_dim == 0 || truncate_dim > native_dim {
         return Err(anyhow!(
-            "truncate_dim must be within 1..={NATIVE_DIM}, got {truncate_dim}"
+            "truncate_dim must be within 1..={native_dim}, got {truncate_dim}"
         ));
     }
     if truncate_dim < 32 {
         return Err(anyhow!("truncate_dim must be >= 32, got {truncate_dim}"));
     }
-    if !ALLOWED_DIMS.contains(&truncate_dim) {
+    if !ladder.contains(&truncate_dim) {
         eprintln!(
             "embroider: truncate_dim={truncate_dim} is not an official Matryoshka level \
-             {ALLOWED_DIMS:?}; retrieval quality may be suboptimal."
+             {ladder:?}; retrieval quality may be suboptimal."
         );
     }
     Ok(())
+}
+
+/// Validate the shared Matryoshka dim range before any I/O.
+pub(crate) fn check_truncate_dim(truncate_dim: usize) -> Result<()> {
+    check_truncate_dim_for(truncate_dim, NATIVE_DIM, ALLOWED_DIMS)
+}
+
+/// Validate an optional token limit against one model's positional ceiling
+/// before any I/O: None selects the compat default (MAX_LENGTH).
+/// Returns the effective limit.
+pub(crate) fn check_max_length_for(
+    max_length: Option<usize>,
+    ceiling: usize,
+) -> Result<usize> {
+    match max_length {
+        None => Ok(MAX_LENGTH),
+        Some(n) if (1..=ceiling).contains(&n) => Ok(n),
+        Some(n) => Err(anyhow!(
+            "max_length must be within 1..={ceiling} (model position ceiling), got {n}"
+        )),
+    }
 }
 
 /// Validate an optional token limit before any I/O: None selects the
 /// compat default (MAX_LENGTH); Some(n) must fit the model's ceiling.
 /// Returns the effective limit.
 pub(crate) fn check_max_length(max_length: Option<usize>) -> Result<usize> {
-    match max_length {
-        None => Ok(MAX_LENGTH),
-        Some(n) if (1..=MODEL_MAX_TOKENS).contains(&n) => Ok(n),
-        Some(n) => Err(anyhow!(
-            "max_length must be within 1..={MODEL_MAX_TOKENS} (Qwen3 position ceiling), got {n}"
-        )),
-    }
+    check_max_length_for(max_length, MODEL_MAX_TOKENS)
 }
 
 /// Load a tokenizer with the given truncation policy. `None` disables
@@ -237,8 +258,17 @@ impl JinaV5 {
         precision: Precision,
         cpu_arena: bool,
     ) -> Result<Self> {
-        check_truncate_dim(truncate_dim)?;
-        let max_length = check_max_length(max_length)?;
+        // Per-model contract: registered ids validate against their own
+        // ladder/ceiling (nano tops at 768 dim / 8192 ctx); unknown ids keep
+        // the frozen legacy (text-small) validation.
+        match lookup_model(model_id) {
+            Some(spec) => {
+                check_truncate_dim_for(truncate_dim, spec.native_dim, spec.ladder)?;
+            }
+            None => check_truncate_dim(truncate_dim)?,
+        }
+        let ceiling = lookup_model(model_id).map(|s| s.max_tokens).unwrap_or(MODEL_MAX_TOKENS);
+        let max_length = check_max_length_for(max_length, ceiling)?;
 
         // Resolve the device BEFORE acquisition: precision follows the
         // device the session will actually land on, so CUDA-requested-
@@ -254,34 +284,39 @@ impl JinaV5 {
                  precision='fp32' (or 'auto') for CPU sessions."
             );
         }
-        // Precision selects the acquisition repo — but only for the
-        // default FP32 id. Explicit ids (omni tower, mirrors) win untouched.
-        let repo_id = repo_for_precision(model_id, precision);
+        // Precision selects the acquisition artifact from the registry.
+        // Unknown ids take the legacy path (id = fp32 repo, default file).
+        let artifact = artifact_for(model_id, precision);
 
-        // ---- model acquisition (optimum `subfolder="onnx"` layout) ----
-        let (owner, name) = parse_owner_name(repo_id)?;
+        // ---- model acquisition (per-artifact file layout) ----
+        let (owner, name) = parse_owner_name(artifact.repo)?;
         let client = hf_client(cache_dir.clone())?;
         let repo = client.model(owner, name);
         let rev = revision.map(str::to_string);
         let onnx_path = repo
             .download_file()
-            .filename("onnx/model.onnx".to_string())
+            .filename(artifact.file.to_string())
             .maybe_revision(rev.clone())
             .send()
-            .map_err(|e| anyhow!("onnx/model.onnx missing for '{repo_id}': {e}"))?;
-        // External-data sidecar must sit next to model.onnx; the hub cache
-        // layout preserves that, so a plain fetch into the same dir suffices.
-        if repo
-            .download_file()
-            .filename("onnx/model.onnx_data".to_string())
-            .maybe_revision(rev)
-            .send()
-            .is_err()
-        {
-            eprintln!("embroider: no onnx/model.onnx_data sidecar; assuming inline weights");
+            .map_err(|e| anyhow!("{} missing for '{}': {e}", artifact.file, artifact.repo))?;
+        // External-data sidecar must sit next to the model file; the hub
+        // cache layout preserves that, so a plain fetch into the same dir
+        // suffices. Name derives from the artifact stem (fp16/int8 variants
+        // ship their own sidecars, not the fp32 one).
+        match artifact.sidecar() {
+            Some(sidecar) if repo
+                .download_file()
+                .filename(sidecar.clone())
+                .maybe_revision(rev)
+                .send()
+                .is_err() =>
+            {
+                eprintln!("embroider: no {sidecar} sidecar; assuming inline weights");
+            }
+            _ => {}
         }
         // ---- tokenizer (no padding here; single-doc encodes need none) ----
-        let tok_path = fetch_tokenizer_file(repo_id, revision, cache_dir)?;
+        let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
         let tokenizer = load_tokenizer(&tok_path, Some(max_length))?;
 
         let loaded =
@@ -596,6 +631,21 @@ mod tests {
             None, None, 16, DeviceReq::Cpu, None, Precision::Auto, false,
         ).err().expect("open should fail").to_string();
         assert!(e.contains(">= 32"), "{e}");
+    }
+
+    #[test]
+    fn open_validates_dims_against_model_contract() {
+        use crate::acquire::NANO_TEXT_MODEL;
+        // Nano tops at 768: 1024 dies with the nano ceiling, 768 passes
+        // validation (and would proceed to network — not tested here).
+        let e = JinaV5::open(
+            NANO_TEXT_MODEL, None, None, 1024, DeviceReq::Cpu, None, Precision::Auto, false,
+        ).err().expect("open should fail").to_string();
+        assert!(e.contains("1..=768"), "{e}");
+        let e = JinaV5::open(
+            NANO_TEXT_MODEL, None, None, 512, DeviceReq::Cpu, Some(32768), Precision::Auto, false,
+        ).err().expect("open should fail").to_string();
+        assert!(e.contains("1..=8192"), "{e}");
     }
 
     #[test]

@@ -30,8 +30,9 @@ pub mod probe;
 pub mod providers;
 
 pub use acquire::{
-    fetch_tokenizer_file, parse_owner_name, repo_for_precision,
-    FP16_TEXT_MODEL, FP32_TEXT_MODEL,
+    artifact_for, builtin_models, fetch_tokenizer_file, lookup_model,
+    parse_owner_name, repo_for_precision, Artifact, ModelSpec,
+    FP16_TEXT_MODEL, FP32_TEXT_MODEL, NANO_TEXT_MODEL, TEXT_NANO, TEXT_SMALL,
 };
 pub use diag::{report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
@@ -209,13 +210,45 @@ impl PyJinaTokenizer {
     }
 }
 
+/// Registry listing for UIs and config validation: one dict per builtin
+/// model (id, native_dim, max_tokens, ladder, precisions with artifacts).
+#[cfg(feature = "extension-module")]
+#[pyfunction]
+fn available_models() -> Vec<std::collections::HashMap<String, String>> {
+    builtin_models()
+        .iter()
+        .map(|m| {
+            let mut d = std::collections::HashMap::new();
+            d.insert("id".to_string(), m.id.to_string());
+            d.insert("native_dim".to_string(), m.native_dim.to_string());
+            d.insert("max_tokens".to_string(), m.max_tokens.to_string());
+            d.insert(
+                "ladder".to_string(),
+                m.ladder.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","),
+            );
+            let mut prec = vec!["fp32"];
+            if m.fp16.is_some() {
+                prec.push("fp16");
+            }
+            if m.int8.is_some() {
+                prec.push("int8");
+            }
+            d.insert("precisions".to_string(), prec.join(","));
+            d
+        })
+        .collect()
+}
+
 #[cfg(feature = "extension-module")]
 #[pymodule]
 fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaV5>()?;
     m.add_class::<PyJinaTokenizer>()?;
+    m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;
     m.add("MAX_LENGTH", MAX_LENGTH)?;
     m.add("MODEL_MAX_TOKENS", MODEL_MAX_TOKENS)?;
+    m.add("FP32_TEXT_MODEL", FP32_TEXT_MODEL)?;
+    m.add("NANO_TEXT_MODEL", NANO_TEXT_MODEL)?;
     Ok(())
 }

@@ -5,6 +5,27 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-15
+
+### Added
+- Model registry (`acquire::{ModelSpec, Artifact, builtin_models,
+  lookup_model, artifact_for}`): the loader now resolves (model,
+  precision) pairs against a static contract — id, native dim, token
+  ceiling, Matryoshka ladder, per-precision artifacts — instead of one
+  hardcoded repo. Builtins: text-small (fp32 + FP16 mirror) and
+  text-nano (official in-repo fp32/fp16/dynamic-int8, measured in the
+  nano probe: fp32/fp16 @0.99994, int8 rank-kept @0.99980, q4 killed).
+  `JinaV5::open(model_id, ...)` needs no signature change: registered
+  ids validate against their own ladder/ceiling (nano: 768 dim max,
+  8192 ctx) and fetch their own file layout (sidecar derived per
+  artifact stem); unknown ids keep the frozen legacy path. Default id
+  unchanged — adding models never moves existing graphs.
+- `Precision::Int8` (explicit opt-in only; `auto` never selects it).
+  Unlisted (model, precision) pairs fall back to fp32, never to
+  unvalidated weights.
+- Python `embroider.available_models()` + `NANO_TEXT_MODEL` constant
+  for UIs and config validation.
+
 ## [0.1.5] — 2026-09-14
 
 ### Added
