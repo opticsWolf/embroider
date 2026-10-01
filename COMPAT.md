@@ -25,3 +25,29 @@ Rules:
   long docs after changing it, don't mix limits in one graph.
 - **Wheel matrix**: embroider ships cp311/cp312/cp313 wheels per platform;
   okfgraph requires Python ≥ 3.11, matching exactly.
+
+## Model licences
+
+embroider's code is MIT OR Apache-2.0. The weights its registry
+(`src/acquire.rs`) downloads are licensed separately:
+
+| Registry model | Artifact repo | Licence |
+|---|---|---|
+| `jina-embeddings-v5-text-small-retrieval` fp32 | `jinaai/jina-embeddings-v5-text-small-retrieval` | CC BY-NC 4.0 |
+| `jina-embeddings-v5-text-small-retrieval` fp16 | `opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16` | CC BY-NC 4.0 (ONNX conversion of the above) |
+| `jina-embeddings-v5-text-nano-retrieval` fp32 / fp16 / int8 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | CC BY-NC 4.0 |
+
+- **Every built-in model is non-commercial.** Any consumer (okfgraph,
+  bobine's callers) that runs them commercially needs a commercial licence
+  from Jina AI.
+- **Mirrors and conversions** we publish (e.g. the fp16 mirror) keep the
+  upstream licence. Their model card must carry `license`, `base_model`,
+  attribution to the upstream authors and a list of the changes made.
+- **New registry entries** record the artifact's licence in this table in
+  the same change. A model whose licence forbids redistributing adapted
+  weights is referenced by upstream repo only, never mirrored.
+- bobine's PDF models (layout, OCR, tables, formulas) are fetched by bobine,
+  not by this registry. They are listed with their licences in okfgraph's
+  README, "Model licences" section.
+- Licences are as declared on each Hugging Face model card when checked
+  (2026-09-27). The cards are authoritative; this is not legal advice.
