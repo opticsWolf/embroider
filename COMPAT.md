@@ -7,14 +7,17 @@ proof — okfgraph's suite asserts live vectors against them.
 
 | okfgraph | bobine | embroider | onnxruntime (pip) | embroider wheels |
 |---|---|---|---|---|
-| 0.2.12 | 0.5.11 | 0.1.3 | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.7.x | 0.5.x+ | 0.2.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 
 Rules:
 
 - **Single pinned ORT**: one `onnxruntime` binary shared by every Rust
   consumer (`ORT_DYLIB_PATH`-overridable). Never float it per project.
-- **Floor pin**: okfgraph requires `embroider>=0.1,<0.2` — 0.2.x stays on
-  embroider 0.1.x so the Jina contract moves only with okfgraph releases.
+- **Floor pin**: okfgraph requires `embroider>=0.2,<0.3` — 0.7.x stays on
+  embroider 0.2.x so the Jina contract moves only with okfgraph releases.
+- **No torch anywhere in the chain**: text embeddings (embroider/Jina) and
+  bobine vision models are all ONNX Runtime; okfgraph image embeddings are
+  caption-based text vectors since okfgraph 0.7.0.
 - **Frozen vector space**: prefixes, last-token pooling, truncation order
   never change inside a minor. A contract change is a new minor plus a
   re-index-everything notice, and the golden fixture is regenerated.
