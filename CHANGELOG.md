@@ -5,6 +5,8 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-03
+
 ### Added
 - Vision contract (`vision::{JinaV5Vision, vision_target_size}`, Phase 6):
   dynamic-grid omni-nano image embeddings sharing the text-nano vector
