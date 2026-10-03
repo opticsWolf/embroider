@@ -46,6 +46,35 @@ available_models()
 `task` is load-bearing: `query` ↔ `Query:` prefix, `document` ↔
 `Document:` — swapped prefixes silently fork the space.
 
+```python
+# pin weights + tokenizer to an exact commit (reproducibility)
+m = JinaV5.open("jinaai/jina-embeddings-v5-text-small-retrieval",
+                revision="abc123...", cache_dir="~/.cache/myapp")
+
+# someone else's compatible repo (Jina layout: onnx/model.onnx + tokenizer.json)
+m = JinaV5.open("myorg/my-encoder")
+
+# int8: nano only, explicit opt-in (auto never resolves here)
+m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8")
+```
+
+### Devices and precisions
+
+| `device=` | Meaning |
+|---|---|
+| `"auto"` (default) | CUDA when the loaded ORT exposes a usable EP, else CPU |
+| `"cpu"` / `"cuda"` (`"gpu"` alias) | Pin it; CUDA-requested-but-missing degrades to CPU with a stderr warning |
+
+| `precision=` | Meaning |
+|---|---|
+| `"auto"` (default) | Follows the *landed* device: CUDA→fp16, CPU→fp32 |
+| `"fp32"` / `"fp16"` | Pinned (fp16 selects the mirror artifact for the default id) |
+| `"int8"` | Nano only; deployment choice, never automatic |
+
+`truncate_dim`: Matryoshka ladder only, 32–1024 (nano tops at 768).
+`max_length`: 1–32768, default 8192 (compat); same (text, `max_length`)
+→ same vector, short inputs bit-identical at any limit.
+
 ## Vision embeddings (Python)
 
 ```python
@@ -61,6 +90,18 @@ vec = v.encode_image(rgb, h, w)   # compares against text-NANO vectors only
 
 fp32 on CPU, fp16 on CUDA (`auto` default). Explicit fp16-on-CPU is an
 error (the graph stalls — fail-fast, not slow).
+
+```python
+# local weight files (sidecar .onnx_data must sit next to model.onnx)
+v = JinaV5Vision.open_files("model.onnx", "tokenizer.json")
+
+# cap CUDA arena growth (bytes); CPU arena is always off here
+v = JinaV5Vision.open(gpu_mem_limit=2_000_000_000)
+```
+
+Fail-fast surfaces: wrong resolution (`vision_target_size` mismatch),
+wrong tokenizer (`seq == image_tokens + 15` re-checked every encode),
+non-nano text partner — all raise, never embed.
 
 ## Tokenizer-only counts (Python)
 
@@ -85,9 +126,45 @@ let policy = embroider::SessionPolicy::text_embed();
 
 // environment diagnostics
 let rep = embroider::report();   // dylib path + CUDA usable?
-let cuda = embroider::cuda_available();
+let cuda = embroider::cuda_available();   // OnceLock-cached EP check, not a registration probe
 let (owner, name) = embroider::parse_owner_name("org/repo")?;
+
+// request parsing (same strings as the Python kwargs)
+let device = embroider::DeviceReq::parse("auto")?;        // auto | cpu | cuda (gpu alias)
+let prec = embroider::Precision::parse("fp16")?;          // auto | fp32 | fp16 | int8
+let landed = prec.resolve(used_cuda);   // pass the LANDED device, never the request
 ```
+
+## Errors
+
+Python: bad arguments → `ValueError` (firing before any I/O);
+load/encode failures → `RuntimeError` with the full anyhow chain
+(`{e:#}`). A failed `open` is cached — config errors raise once, not
+per encode. Rust: `anyhow::Result` everywhere, `ort` errors stringified
+at API boundaries.
+
+## Conformance (for consumers)
+
+Vendor `fixtures/golden_jina_v5_text_small.json` (12 vectors: 4 texts ×
+Query/Document × dims 64/512 + token counts) and assert live vectors at
+`abs=1e-6` — catches wrong model, pooling, prefix, or truncation, immune
+to cross-CPU noise. Vision host math: `fixtures/vision/`
+(`target_sizes.json`, `host_tensors.json`, `pixel_cases.json`) asserts
+bitwise equality. Regenerate only on an intentional contract change =
+new minor version + re-index-everything notice.
+
+## Testing
+
+```bash
+cargo test --locked                      # 42 pure unit tests (no net/dylib)
+# vision e2e (ignored): needs ORT 1.29 dylib + weight files + CUDA ideally
+ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
+  VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \
+  VISION_E2E_CUDA=1 cargo test --offline --test vision_e2e -- --ignored
+```
+
+Python parity lives with okfgraph (`tests/test_parity.py`, slow):
+Rust vs numpy/transformers across dims × tasks × texts at ≤ 1e-5.
 
 ## Rules
 
@@ -98,3 +175,5 @@ let (owner, name) = embroider::parse_owner_name("org/repo")?;
 - Encode fails fast: no fallback, no silent space fork.
 - Stale `C:\Windows\System32\onnxruntime.dll` (1.17.x in the wild) kills
   the load — point `ORT_DYLIB_PATH` at the venv build.
+- GIL is released during encode; batch encoding stays sequential
+  (padded batches waste attention compute on variable-length docs).
