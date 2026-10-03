@@ -1,7 +1,7 @@
 # embroider — Quick Reference
 
 Copy-paste surface. Rationale lives in `README.md`, release matrix in
-`COMPAT.md`.
+`compat.md`.
 
 ## Install
 

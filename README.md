@@ -1,6 +1,5 @@
 # embroider
-
-*Jina v5 text + image embeddings over ONNX Runtime (Rust core, PyO3)*
+### Jina v5 text + image embeddings over ONNX Runtime (Rust core, PyO3)
 
 [![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
@@ -53,7 +52,7 @@ spaces.
 ## Models
 
 Three blessed registry entries (`src/acquire.rs`), all non-commercial
-weights (licences tabled in `COMPAT.md`):
+weights (licences tabled in `docs/compat.md`):
 
 | Registry id | Artifact repo | Precisions | Used for |
 |---|---|---|---|
@@ -306,7 +305,7 @@ CPU / text-embed policy. Unchanged by 0.1.4 (`max_length`) and 0.1.5
 this file and assert live vectors against it (`abs=1e-6` — catches wrong
 model, pooling, prefix, or truncation; immune to cross-CPU noise). Regenerate only on an
 intentional contract change, which is a new minor version plus a
-re-index-everything notice. See `COMPAT.md` for the release matrix.
+re-index-everything notice. See `docs/compat.md` for the release matrix.
 Vision host math is pinned the same way: `fixtures/vision/`
 (`target_sizes.json`, `host_tensors.json`, `pixel_cases.json`) generated
 from the spike's verified `grid.py`; the Rust port asserts bitwise

@@ -27,7 +27,7 @@ All notable changes to `embroider` are documented here. Format follows
 ## [0.2.1] — 2026-10-01
 
 ### Changed
-- Compatibility refresh only (no vector change): `COMPAT.md` current
+- Compatibility refresh only (no vector change): `docs/compat.md` current
   (okfgraph 0.7.x / bobine 0.5.x+ / embroider 0.2.x / onnxruntime 1.29.0),
   floor pin `>=0.2,<0.3`, no-torch-chain note. Bobine moves to
   `embroider = "0.2"` on this release.
