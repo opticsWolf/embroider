@@ -20,7 +20,8 @@ Rules:
   is untouched, same goldens).
 - **No torch anywhere in the chain**: text embeddings (embroider/Jina) and
   bobine vision models are all ONNX Runtime; okfgraph image embeddings are
-  caption-based text vectors since okfgraph 0.7.0.
+  caption text vectors (`mode=text`) or ONNX vision vectors (`optional`/`omni`
+  via `JinaV5Vision`) since okfgraph 0.8.0.
 - **Frozen vector space**: prefixes, last-token pooling, truncation order
   never change inside a minor. A contract change is a new minor plus a
   re-index-everything notice, and the golden fixture is regenerated.
