@@ -9,23 +9,71 @@
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://www.python.org/)
 [![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
 
-`embroider` turns text into vectors — Jina v5 embeddings served through
-ONNX Runtime from a Rust core, with optional PyO3 bindings for Python.
-One frozen contract covers the whole path: task prefix → tokenize → ONNX
-forward → last-token pooling → L2 → Matryoshka truncate → re-normalise,
-so every consumer lands in the same vector space.
+## Contents
 
-One engine, two consumers: **bobine** (PDF/Office → Markdown) reuses the
-ONNX plumbing, **okfgraph** uses the full Jina v5 text-embedding contract.
-It began as a clean move out of OKFgraph's `rust/okf-embed` — an exact
-port of `EmbeddingEngine._encode` — and stays pinned against a
-numpy/transformers replication by OKFgraph's parity harness
-(`tests/test_parity.py`, max abs diff ≤ 1e-5).
+- [What it is](#what-it-is)
+- [Models](#models) — registry, precisions, custom repos, licences
+- [Install](#install)
+- [Module layout](#module-layout)
+- [Runtime: ONNX Runtime discovery](#runtime-onnx-runtime-discovery)
+- [Text embeddings](#text-embeddings)
+- [Vision embeddings](#vision-embeddings)
+- [Running without downloads](#running-without-downloads)
+- [Session/threading policy](#sessionthreading-policy-measured)
+- [Failure policy](#failure-policy) · [Contract notes](#contract-notes) · [Conformance](#conformance) · [Testing](#testing)
 
-Single backend, kept comparable: one lean runtime with no torch /
-transformers / optimum in the hot path, so every vector in an index stays
-directly comparable. If something can't be embedded exactly to contract,
-embroider errors loudly rather than quietly mixing vector spaces.
+## What it is
+
+`embroider` turns text — and images — into vectors: Jina v5 embeddings
+served through ONNX Runtime from a Rust core, with optional PyO3 bindings
+for Python.
+
+### One frozen contract
+
+Task prefix → tokenize → ONNX forward → last-token pooling → L2 →
+Matryoshka truncate → re-normalise. Every consumer lands in the same
+vector space, or gets a loud error instead of a silent fork.
+
+### Two consumers
+
+**okfgraph** uses the full Jina v5 text + vision contract.
+**bobine** (PDF/Office → Markdown) reuses the ONNX plumbing — session
+policy, provider fallback, CUDA probe — while owning its own
+converter-model sessions (RapidOCR, layout, tables, formulas).
+
+### Origin
+
+A clean move out of OKFgraph's `rust/okf-embed` — an exact port of
+`EmbeddingEngine._encode` — still pinned against a numpy/transformers
+replication by OKFgraph's parity harness (`tests/test_parity.py`, max abs
+diff ≤ 1e-5).
+
+### One backend
+
+No torch / transformers / optimum in the hot path, so every vector in an
+index stays directly comparable. If something can't be embedded exactly
+to contract, embroider errors loudly rather than quietly mixing vector
+spaces.
+
+## Models
+
+Three blessed registry entries (`src/acquire.rs`), all non-commercial
+weights (licences tabled in `COMPAT.md`):
+
+| Registry id | Artifact repo | Precisions | Used for |
+|---|---|---|---|
+| `jinaai/jina-embeddings-v5-text-small-retrieval` (default) | itself (fp32) + `opticsWolf/…-onnx-fp16` mirror (fp16) | fp32, fp16 | General text graphs |
+| `jinaai/jina-embeddings-v5-text-nano-retrieval` | itself (in-repo fp32 + fp16 + int8) | fp32, fp16, int8 | Compact graphs; **required text partner** for vision |
+| `jina-v5-omni-nano-retrieval-vision` | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | fp32, fp16 | Image bytes → text-nano space (`text_partner` pinned) |
+
+### Custom models
+
+Unknown ids fall through to the legacy path: the id itself is treated as
+an HF repo holding `onnx/model.onnx` (`lookup_model` → `None`,
+`artifact_for` default layout). Any downstream consumer can point
+embroider at a compatible repo with no registry change. Fully local
+weights skip acquisition entirely — see
+[Running without downloads](#running-without-downloads).
 
 ## Install
 
@@ -69,7 +117,9 @@ build when unset. okfgraph's `resolve_ort_dylib()` runs before the native
 module is imported, so bobine and embroider share **one** ORT binary — no
 version/CUDA drift between ingest and import.
 
-## Lifecycle: lazy session, cheap tokenizer
+## Text embeddings
+
+### Lazy sessions
 
 `JinaV5.open` (model download + ONNX session build) is the single
 expensive step. OKFgraph therefore holds a lazy proxy: construction
@@ -86,9 +136,6 @@ effective choice), `cpu_arena=False` disables the CPU arena allocator
 (8x lower peak RSS for ~1.4x encode time, measured on the FP32 text
 model).
 
-`JinaTokenizer.open` fetches only `tokenizer.json` for exact token counts
-without the session. It never truncates, so counts report true length —
-`JinaV5.count_tokens()` instead reflects the session's `max_length`.
 A failed session open is cached and re-raised — configuration errors fail
 fast once, not once per encode.
 
@@ -103,7 +150,19 @@ explicit model ids (omni tower, mirrors) always win untouched. An explicit
 `fp16`-on-CPU warns loudly but is honoured. Do not mix precisions in one
 index — FP32 vs FP16 weights shift vectors, same as mixing tuning levels.
 
-### Vision: image embeddings sharing the text-nano space
+### Memory: CPU arena off by default
+
+`cpu_arena=False` registers the CPU execution provider explicitly with
+its arena allocator disabled — measured 8x lower peak RSS (15.3 → 1.9 GB
+on FP32) for ~1.4x encode time. Pass `True` only when peak throughput
+beats memory pressure. Vision slots likewise run with the CPU arena off.
+
+## Vision embeddings
+
+Image bytes into the text-nano space (text-nano graphs only — the
+registry's `text_partner` pin refuses anything else).
+
+### Opening and encoding
 
 `JinaV5Vision.open(model_id="jina-v5-omni-nano-retrieval-vision",
 truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None)`
@@ -123,12 +182,14 @@ fail-fast beats a hung batch). Sessions use the vision-slot policy
 bytes, CPU arena off. Every encode re-checks `seq == image_tokens +
 15` so a wrong tokenizer fails loudly instead of shifting the space.
 
-### Memory: CPU arena off by default
+## Running without downloads
 
-`cpu_arena=False` registers the CPU execution provider explicitly with
-its arena allocator disabled — measured 8x lower peak RSS (15.3 → 1.9 GB
-on FP32) for ~1.4x encode time. Pass `True` only when peak throughput
-beats memory pressure.
+### Tokenizer-only counts
+
+`JinaTokenizer.open` fetches only `tokenizer.json` for exact token counts
+without the session (~0.5 s cold, 9× cheaper than a session open). It
+never truncates, so counts report true length — `JinaV5.count_tokens()`
+instead reflects the session's `max_length`.
 
 ### Explicit local files (air-gapped)
 
