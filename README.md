@@ -168,8 +168,9 @@ model + same build + same tuning, or re-embed.
 variable-length docs to save ~14 ms of boundary overhead — not worth the
 numerics risk.
 
-`SessionPolicy::ort_defaults()` exists for consumers (bobine's vision
-sessions) that never tuned — policy is data, never a forced default.
+`SessionPolicy::ort_defaults()` exists for consumers (bobine's converter-model
+sessions — RapidOCR, layout, tables, formulas) that never tuned — policy is
+data, never a forced default.
 Re-measure on new hardware/ORT before changing the policy.
 
 ## Pitfall: stale `onnxruntime.dll` on Windows
