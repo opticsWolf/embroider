@@ -1,6 +1,6 @@
 # embroider
 
-*Jina v5 text + image embeddings (Rust core, PyO3)*
+*Jina v5 text + image embeddings over ONNX Runtime (Rust core, PyO3)*
 
 [![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
