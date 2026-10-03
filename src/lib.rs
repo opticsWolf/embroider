@@ -20,12 +20,14 @@
 //! - [`acquire`] — validated HF hub acquisition (blocking, cached)
 //! - [`diag`] — `OrtReport` observation for logs and diagnostics
 //! - [`jina`] — `JinaV5` + `TokenizerHandle` (the frozen contract)
+//! - [`vision`] — `JinaV5Vision` (the dynamic-grid image contract)
 
 pub mod acquire;
 pub mod diag;
 pub mod error;
 pub mod jina;
 pub mod policy;
+pub mod vision;
 pub mod probe;
 pub mod providers;
 
@@ -36,6 +38,10 @@ pub use acquire::{
 };
 pub use diag::{report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
+pub use vision::{
+    vision_target_size, JinaV5Vision, VISION_MAX_PIXELS, VISION_MIN_PIXELS,
+};
+pub use acquire::{VISION_NANO, VISION_NANO_MODEL, VISION_NANO_REPO};
 pub use policy::{DeviceReq, Precision, SessionPolicy};
 pub use probe::cuda_available;
 pub use providers::{
@@ -210,8 +216,110 @@ impl PyJinaTokenizer {
     }
 }
 
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "JinaV5Vision")]
+struct PyJinaV5Vision {
+    inner: JinaV5Vision,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyJinaV5Vision {
+    #[staticmethod]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None))]
+    fn open(
+        model_id: &str,
+        revision: Option<String>,
+        cache_dir: Option<String>,
+        truncate_dim: usize,
+        device: &str,
+        precision: Option<&str>,
+        gpu_mem_limit: Option<u64>,
+    ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
+        let inner = JinaV5Vision::open(
+            model_id,
+            revision.as_deref(),
+            cache_dir.map(PathBuf::from),
+            truncate_dim,
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            precision,
+            gpu_mem_limit,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (onnx_path, tokenizer_path, truncate_dim=512, device="auto", gpu_mem_limit=None))]
+    fn open_files(
+        onnx_path: &str,
+        tokenizer_path: &str,
+        truncate_dim: usize,
+        device: &str,
+        gpu_mem_limit: Option<u64>,
+    ) -> PyResult<Self> {
+        let inner = JinaV5Vision::open_files(
+            std::path::Path::new(onnx_path),
+            std::path::Path::new(tokenizer_path),
+            truncate_dim,
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            gpu_mem_limit,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    /// Embed one already-resized RGB image: `rgb` is raw row-major
+    /// `[h, w, 3]` uint8 bytes (e.g. `bytes`) where `(h, w)` is its own
+    /// `vision_target_size` — Pillow bicubic resize on the caller side.
+    fn encode_image(&self, py: Python<'_>, rgb: Vec<u8>, h: usize, w: usize) -> PyResult<Vec<f32>> {
+        py.detach(|| {
+            self.inner
+                .encode_image(&rgb, h, w)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+        })
+    }
+
+    #[getter]
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    #[getter]
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    #[getter]
+    fn used_cuda(&self) -> bool {
+        self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
+    }
+}
+
+/// Resize target for an `(h, w)` image under the vision resolution
+/// contract — the Pillow side resizes here before calling `encode_image`.
+#[cfg(feature = "extension-module")]
+#[pyfunction]
+fn vision_target_size_py(h: u32, w: u32) -> PyResult<(u32, u32)> {
+    vision_target_size(h, w)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e:#}")))
+}
+
 /// Registry listing for UIs and config validation: one dict per builtin
-/// model (id, native_dim, max_tokens, ladder, precisions with artifacts).
+/// model (id, native_dim, max_tokens, ladder, precisions with artifacts,
+/// text_partner for vision models).
 #[cfg(feature = "extension-module")]
 #[pyfunction]
 fn available_models() -> Vec<std::collections::HashMap<String, String>> {
@@ -234,6 +342,10 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
                 prec.push("int8");
             }
             d.insert("precisions".to_string(), prec.join(","));
+            d.insert(
+                "text_partner".to_string(),
+                m.text_partner.unwrap_or("").to_string(),
+            );
             d
         })
         .collect()
@@ -244,7 +356,10 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
 fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaV5>()?;
     m.add_class::<PyJinaTokenizer>()?;
+    m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
+    m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;
     m.add("MAX_LENGTH", MAX_LENGTH)?;
     m.add("MODEL_MAX_TOKENS", MODEL_MAX_TOKENS)?;

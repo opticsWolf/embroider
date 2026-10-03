@@ -22,6 +22,16 @@ pub const FP16_TEXT_MODEL: &str =
 /// (nano probe): fp32/fp16 faithful @0.99994, int8 keeps rank @0.99980
 /// with zero top-5 flips; q4/q4f16 killed @0.957 with 5/5 pos-1 flips.
 pub const NANO_TEXT_MODEL: &str = "jinaai/jina-embeddings-v5-text-nano-retrieval";
+/// Vision repo: the dynamic-grid omni-nano export (Phase 6). One graph
+/// (vision tower + merger + EuroBERT text tower) with host-computed grid
+/// inputs; sidecars use the `model.onnx.data` layout, hence the explicit
+/// sidecar override below. Weights CC BY-NC 4.0 (Jina), same as the text
+/// models — see the model card for attribution and the changes statement.
+pub const VISION_NANO_REPO: &str =
+    "opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx";
+/// Canonical vision model id. Short (not `owner/name`): the id names the
+/// contract, the spec's artifacts name where the files live.
+pub const VISION_NANO_MODEL: &str = "jina-v5-omni-nano-retrieval-vision";
 
 /// One downloadable artifact: the repo holding it plus the model file
 /// inside that repo. The external-data sidecar is derived (same stem +
@@ -30,12 +40,19 @@ pub const NANO_TEXT_MODEL: &str = "jinaai/jina-embeddings-v5-text-nano-retrieval
 pub struct Artifact<'a> {
     pub repo: &'a str,
     pub file: &'a str,
+    /// Explicit sidecar file inside the repo. `None` derives the legacy
+    /// optimum layout (`onnx/model_fp16.onnx` → `onnx/model_fp16.onnx_data`);
+    /// `Some` names it verbatim (the vision export's `model.onnx.data`).
+    pub sidecar: Option<&'a str>,
 }
 
 impl Artifact<'_> {
-    /// `onnx/model_fp16.onnx` → `onnx/model_fp16.onnx_data`. Returns
-    /// `None` for non-`.onnx` files (inline weights assumed, no sidecar).
+    /// Sidecar filename, or `None` for non-`.onnx` files (inline weights
+    /// assumed, no sidecar).
     pub fn sidecar(self) -> Option<String> {
+        if let Some(explicit) = self.sidecar {
+            return Some(explicit.to_string());
+        }
         self.file
             .strip_suffix(".onnx")
             .map(|stem| format!("{stem}.onnx_data"))
@@ -57,6 +74,10 @@ pub struct ModelSpec {
     pub fp32: Artifact<'static>,
     pub fp16: Option<Artifact<'static>>,
     pub int8: Option<Artifact<'static>>,
+    /// Text model sharing this model's vector space, if any. Vision
+    /// specs set it (image vectors are only comparable to their text
+    /// partner's); text specs leave it `None`.
+    pub text_partner: Option<&'static str>,
 }
 
 pub const TEXT_SMALL: ModelSpec = ModelSpec {
@@ -64,9 +85,10 @@ pub const TEXT_SMALL: ModelSpec = ModelSpec {
     native_dim: 1024,
     max_tokens: 32768,
     ladder: &[32, 64, 128, 256, 512, 768, 1024],
-    fp32: Artifact { repo: FP32_TEXT_MODEL, file: "onnx/model.onnx" },
-    fp16: Some(Artifact { repo: FP16_TEXT_MODEL, file: "onnx/model.onnx" }),
+    fp32: Artifact { repo: FP32_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp16: Some(Artifact { repo: FP16_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None }),
     int8: None, // killed in the quant spike @0.93 drift — never shipped
+    text_partner: None,
 };
 
 pub const TEXT_NANO: ModelSpec = ModelSpec {
@@ -74,19 +96,47 @@ pub const TEXT_NANO: ModelSpec = ModelSpec {
     native_dim: 768,
     max_tokens: 8192,
     ladder: &[32, 64, 128, 256, 512, 768],
-    fp32: Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model.onnx" },
-    fp16: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_fp16.onnx" }),
-    int8: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_quantized.onnx" }),
+    fp32: Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp16: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_fp16.onnx", sidecar: None }),
+    int8: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_quantized.onnx", sidecar: None }),
+    text_partner: None,
+};
+
+/// Vision contract: dynamic-grid omni-nano (Phase 6). Same 768-dim
+/// Matryoshka ladder as text-nano, its `text_partner` — image vectors
+/// only compare against text-nano vectors. Prompt fits ≤1295 tokens;
+/// `max_tokens` carries the shared EuroBERT positional ceiling (8192).
+/// fp16 recipe: ORT converter, keep_io_types, Pow/ReduceMean/Sqrt/
+/// Reciprocal/Cos/Sin kept fp32, duplicate Casts deduped. No int8/q4
+/// (community q4f16 killed @0.954 drift). Pinned artifact commit + per-file
+/// sha256 live in the repo's `manifest.json`.
+pub const VISION_NANO: ModelSpec = ModelSpec {
+    id: VISION_NANO_MODEL,
+    native_dim: 768,
+    max_tokens: 8192,
+    ladder: &[32, 64, 128, 256, 512, 768],
+    fp32: Artifact {
+        repo: VISION_NANO_REPO,
+        file: "fp32/model.onnx",
+        sidecar: Some("fp32/model.onnx.data"),
+    },
+    fp16: Some(Artifact {
+        repo: VISION_NANO_REPO,
+        file: "fp16/model.onnx",
+        sidecar: Some("fp16/model.onnx.data"),
+    }),
+    int8: None,
+    text_partner: Some(NANO_TEXT_MODEL),
 };
 
 /// Builtin registry. The default id stays `TEXT_SMALL.id` — adding models
 /// never moves existing graphs (different weights = different vector space).
 pub fn builtin_models() -> &'static [ModelSpec] {
-    &[TEXT_SMALL, TEXT_NANO]
+    &[TEXT_SMALL, TEXT_NANO, VISION_NANO]
 }
 
 /// Look up a canonical id in the registry. Unknown ids (custom repos,
-/// omni tower, mirrors) return `None` and take the legacy path: the id
+/// omni-small, mirrors) return `None` and take the legacy path: the id
 /// itself is the fp32 repo with the default `onnx/model.onnx` layout.
 pub fn lookup_model(model_id: &str) -> Option<ModelSpec> {
     builtin_models().iter().find(|m| m.id == model_id).copied()
@@ -103,7 +153,7 @@ pub fn artifact_for<'a>(model_id: &'a str, precision: Precision) -> Artifact<'a>
             Precision::Int8 => spec.int8.unwrap_or(spec.fp32),
             _ => spec.fp32,
         },
-        None => Artifact { repo: model_id, file: "onnx/model.onnx" },
+        None => Artifact { repo: model_id, file: "onnx/model.onnx", sidecar: None },
     }
 }
 
@@ -201,10 +251,38 @@ mod tests {
 
     #[test]
     fn artifact_sidecar_derives_from_stem() {
-        let a = Artifact { repo: "x/y", file: "onnx/model_fp16.onnx" };
+        let a = Artifact { repo: "x/y", file: "onnx/model_fp16.onnx", sidecar: None };
         assert_eq!(a.sidecar().as_deref(), Some("onnx/model_fp16.onnx_data"));
-        let b = Artifact { repo: "x/y", file: "model.bin" };
+        let b = Artifact { repo: "x/y", file: "model.bin", sidecar: None };
         assert_eq!(b.sidecar(), None);
+    }
+
+    #[test]
+    fn artifact_sidecar_explicit_override_wins() {
+        let a = Artifact {
+            repo: VISION_NANO_REPO,
+            file: "fp32/model.onnx",
+            sidecar: Some("fp32/model.onnx.data"),
+        };
+        assert_eq!(a.sidecar().as_deref(), Some("fp32/model.onnx.data"));
+    }
+
+    #[test]
+    fn registry_vision_contract() {
+        let spec = lookup_model(VISION_NANO_MODEL).expect("vision registered");
+        assert_eq!(spec.native_dim, 768);
+        assert_eq!(spec.ladder, &[32, 64, 128, 256, 512, 768]);
+        assert_eq!(spec.text_partner, Some(NANO_TEXT_MODEL));
+        assert!(TEXT_SMALL.text_partner.is_none());
+        assert!(TEXT_NANO.text_partner.is_none());
+        let fp32 = artifact_for(VISION_NANO_MODEL, Precision::Fp32);
+        assert_eq!((fp32.repo, fp32.file), (VISION_NANO_REPO, "fp32/model.onnx"));
+        assert_eq!(fp32.sidecar().as_deref(), Some("fp32/model.onnx.data"));
+        let fp16 = artifact_for(VISION_NANO_MODEL, Precision::Fp16);
+        assert_eq!((fp16.repo, fp16.file), (VISION_NANO_REPO, "fp16/model.onnx"));
+        // Unlisted pair (vision has no int8) falls back to fp32.
+        let int8 = artifact_for(VISION_NANO_MODEL, Precision::Int8);
+        assert_eq!((int8.repo, int8.file), (VISION_NANO_REPO, "fp32/model.onnx"));
     }
 
     #[test]

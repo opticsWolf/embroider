@@ -654,10 +654,12 @@ name = "embroider"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "hf-hub",
  "ndarray",
  "ort",
  "pyo3",
+ "serde_json",
  "tokenizers",
 ]
 
