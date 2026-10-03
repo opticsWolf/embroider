@@ -39,6 +39,7 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `jina-embeddings-v5-text-small-retrieval` fp32 | `jinaai/jina-embeddings-v5-text-small-retrieval` | CC BY-NC 4.0 |
 | `jina-embeddings-v5-text-small-retrieval` fp16 | `opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16` | CC BY-NC 4.0 (ONNX conversion of the above) |
 | `jina-embeddings-v5-text-nano-retrieval` fp32 / fp16 / int8 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | CC BY-NC 4.0 |
+| `jina-v5-omni-nano-retrieval-vision` fp32 / fp16 | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | CC BY-NC 4.0 (dynamic-grid ONNX export of `jinaai/jina-embeddings-v5-omni-nano-retrieval`; card carries base_model, attribution, changes) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence

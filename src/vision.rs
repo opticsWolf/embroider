@@ -235,10 +235,23 @@ pub(crate) fn pixel_values(rgb: &[u8], h: usize, w: usize) -> Result<Array2<f32>
         .map_err(|e| anyhow!("pixel_values shape: {e}"))
 }
 
+/// Load a vision tokenizer: truncation permanently off. The shipped
+/// `tokenizer.json` carries a 512-truncation in-file (the text path
+/// overrides it explicitly); an image prompt runs up to 1280 + 15 tokens
+/// and must never be cut — the spike's `grid.py` calls `no_truncation()`
+/// for the same reason. `encode_image` re-checks the outcome via the
+/// `seq == image_tokens + 15` guard.
+fn load_vision_tokenizer(tok_path: &Path) -> Result<tokenizers::Tokenizer> {
+    let mut tokenizer = load_tokenizer(tok_path, None)?;
+    tokenizer
+        .with_truncation(None)
+        .map_err(|e| anyhow!("truncation disable failed: {e}"))?;
+    Ok(tokenizer)
+}
+
 /// Prompt token ids: `<|im_start|>user\n` + `<image>`×k + `<|im_end|>\n`
-/// with special tokens, truncation permanently off (an image prompt runs
-/// up to 1280 + 15 tokens; the shipped tokenizer.json defaults to a 512
-/// truncation the text path sets explicitly — vision never sets one).
+/// with special tokens (see [`load_vision_tokenizer`] for why truncation
+/// is off).
 pub(crate) fn prompt_ids(
     tokenizer: &tokenizers::Tokenizer,
     n_image_tokens: usize,
@@ -397,9 +410,9 @@ impl JinaV5Vision {
             }
             _ => {}
         }
-        // ---- tokenizer: truncation permanently off (see prompt_ids) ----
+        // ---- tokenizer: truncation permanently off (see load_vision_tokenizer) ----
         let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
-        let tokenizer = load_tokenizer(&tok_path, None)?;
+        let tokenizer = load_vision_tokenizer(&tok_path)?;
 
         let (session, used_cuda) = build_vision_session(&onnx_path, device, gpu_mem_limit)?;
         Ok(Self {
@@ -438,7 +451,7 @@ impl JinaV5Vision {
                 tokenizer_path.display()
             ));
         }
-        let tokenizer = load_tokenizer(tokenizer_path, None)?;
+        let tokenizer = load_vision_tokenizer(tokenizer_path)?;
         let (session, used_cuda) = build_vision_session(onnx_path, device, gpu_mem_limit)?;
         Ok(Self {
             session,

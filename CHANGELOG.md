@@ -5,6 +5,23 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Vision contract (`vision::{JinaV5Vision, vision_target_size}`, Phase 6):
+  dynamic-grid omni-nano image embeddings sharing the text-nano vector
+  space. Exact Rust port of the spike's `grid.py` (pinned bit-identical by
+  `fixtures/vision/`: 24 resize targets, 31 host-tensor grids, 3 pixel
+  pipelines). Registry id `jina-v5-omni-nano-retrieval-vision`
+  (`text_partner = jina-v5-text-nano-retrieval`, fp32/fp16 artifacts from
+  `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx`, explicit
+  sidecar layout, CC BY-NC 4.0). `Precision::Auto` → fp16 on CUDA / fp32
+  on CPU; explicit fp16-on-CPU fails fast (the graph stalls on CPU, it
+  doesn't just run slow). Vision-slot sessions: ORT defaults + CUDA
+  `arena_extend_strategy=kSameAsRequested` + optional `gpu_mem_limit`;
+  CPU arena off. Reverses the "no vision models" non-goal — minor bump
+  with this note. End-to-end parity vs torch native (ignored test,
+  `tests/vision_e2e.rs`): cos 1.00000/0.99998 fp32, ≥0.99991 fp16 on 5
+  real figures.
+
 ## [0.2.1] — 2026-10-01
 
 ### Changed

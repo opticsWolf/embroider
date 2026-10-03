@@ -1,4 +1,4 @@
-# embroider — Jina v5 text embeddings (Rust core, PyO3)
+# embroider — Jina v5 text + image embeddings (Rust core, PyO3)
 
 [![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
@@ -101,6 +101,26 @@ explicit model ids (omni tower, mirrors) always win untouched. An explicit
 `fp16`-on-CPU warns loudly but is honoured. Do not mix precisions in one
 index — FP32 vs FP16 weights shift vectors, same as mixing tuning levels.
 
+### Vision: image embeddings sharing the text-nano space
+
+`JinaV5Vision.open(model_id="jina-v5-omni-nano-retrieval-vision",
+truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None)`
+embeds one already-resized RGB image (`encode_image(rgb_bytes, h, w)`
+where `(h, w)` is its own `vision_target_size(h, w)` — Pillow bicubic
+resize on the caller side; anything else is rejected rather than
+embedded under the wrong resolution contract). Image vectors compare
+against text-nano text vectors only (`text_partner` in the registry).
+The dynamic-grid graph takes six inputs; the three grid tensors
+(`vision_pos_ids`, `interp_indices`, `interp_weights`) are computed on
+the host, bit-identical to transformers (fixture-pinned). `auto`
+precision → fp16 on CUDA / fp32 on CPU; explicit fp16-on-CPU is an
+error (the graph stalls on CPU — it doesn't merely run slow, so
+fail-fast beats a hung batch). Sessions use the vision-slot policy
+(ORT defaults, never the text tuning), CUDA
+`arena_extend_strategy=kSameAsRequested`, optional `gpu_mem_limit`
+bytes, CPU arena off. Every encode re-checks `seq == image_tokens +
+15` so a wrong tokenizer fails loudly instead of shifting the space.
+
 ### Memory: CPU arena off by default
 
 `cpu_arena=False` registers the CPU execution provider explicitly with
@@ -182,6 +202,11 @@ shutdown (fallout from ort's exit handler, not the root cause). Point
   A 32K-token forward is O(n²) memory — size the limit to the machine.
 - Batch encoding is sequential by design (padded batches waste attention
   compute on variable-length docs). GIL is released during encode.
+- Vision: one image per call (`seq = patches/4 + 15`, ≤1295 tokens).
+  Inputs `input_ids`/`attention_mask` int64, `pixel_values` float32,
+  `vision_pos_ids`/`interp_indices` int64, `interp_weights` float32;
+  output `sentence_embedding` float32 `[1,768]`, then the same
+  L2 → truncate → re-normalise as text (same Matryoshka ladder).
 - `input_ids`/`attention_mask` feed as int64; pooling takes the last
   attended token (`mask_sum - 1`, clamped ≥ 0).
 
@@ -196,18 +221,37 @@ this file and assert live vectors against it (`abs=1e-6` — catches wrong
 model, pooling, prefix, or truncation; immune to cross-CPU noise). Regenerate only on an
 intentional contract change, which is a new minor version plus a
 re-index-everything notice. See `COMPAT.md` for the release matrix.
+Vision host math is pinned the same way: `fixtures/vision/`
+(`target_sizes.json`, `host_tensors.json`, `pixel_cases.json`) generated
+from the spike's verified `grid.py`; the Rust port asserts bitwise
+equality, and `fixtures/vision/e2e/` (5 real figures + torch goldens)
+backs the ignored end-to-end parity test.
 
 ## Testing
 
-- **Rust unit tests** (28, pure — no network, no dylib, no tokenizer
+- **Rust unit tests** (42, pure — no network, no dylib, no tokenizer
   file): device/precision parsing, precision-follows-device resolution,
   FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,
-  contract constants, and `open()`/`open_files()` validation (dims,
-  `max_length`) firing before I/O.
+  contract constants, `open()`/`open_files()` validation (dims,
+  `max_length`) firing before I/O, the vision registry entry, the vision
+  resize contract (incl. banker's rounding and aspect rejection), host
+  tensors bit-identical to `fixtures/vision/` on all 31 grids, the
+  pixel pipeline bit-identical on 3 cases, and the vision fp16-on-CPU
+  refusal.
 
   ```bash
   cargo test --locked
+  ```
+
+- **Vision end-to-end** (`tests/vision_e2e.rs`, ignored — needs ORT
+  1.29 dylib, the vision weight files, and ideally CUDA): 5 real
+  figures vs torch-native goldens, cos ≥ 0.9999 fp32 / ≥ 0.999 fp16.
+
+  ```bash
+  ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
+    VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \
+    VISION_E2E_CUDA=1 cargo test --offline --test vision_e2e -- --ignored
   ```
 
 - **Python parity** lives with the consumers: OKFgraph's
