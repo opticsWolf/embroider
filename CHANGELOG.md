@@ -3,7 +3,12 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [0.3.1] — 2026-10-03
+
+### Changed
+- Docs only: README restructure (TOC, Models section with registry +
+  custom-model loading, consumer recipe for non-Jina sessions), new
+  `docs/quickref.md`, `COMPAT.md` → `docs/compat.md`. No code change.
 
 ## [0.3.0] — 2026-10-03
 
