@@ -22,6 +22,7 @@
 - [Running without downloads](#running-without-downloads)
 - [Session/threading policy](#sessionthreading-policy-measured)
 - [Failure policy](#failure-policy) · [Contract notes](#contract-notes) · [Conformance](#conformance) · [Testing](#testing)
+- [Quick reference](docs/quickref.md) — copy-paste Python/Rust surface
 
 ## What it is
 
