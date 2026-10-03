@@ -311,7 +311,7 @@ impl PyJinaV5Vision {
 /// Resize target for an `(h, w)` image under the vision resolution
 /// contract — the Pillow side resizes here before calling `encode_image`.
 #[cfg(feature = "extension-module")]
-#[pyfunction]
+#[pyfunction(name = "vision_target_size")]
 fn vision_target_size_py(h: u32, w: u32) -> PyResult<(u32, u32)> {
     vision_target_size(h, w)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e:#}")))
