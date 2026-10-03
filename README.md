@@ -15,6 +15,7 @@
 - [Models](#models) — registry, precisions, custom repos, licences
 - [Install](#install)
 - [Module layout](#module-layout)
+- [Using embroider without Jina](#using-embroider-without-jina) — session-policy recipe for other models
 - [Runtime: ONNX Runtime discovery](#runtime-onnx-runtime-discovery)
 - [Text embeddings](#text-embeddings)
 - [Vision embeddings](#vision-embeddings)
@@ -100,6 +101,33 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 The default (pure-Rust) build is Python-free — no `pyo3` in downstream
 trees; the `extension-module` Cargo feature gates the PyO3 bindings and is
 enabled only for wheel builds (maturin), the same pattern bobine uses.
+
+## Using embroider without Jina
+
+The policy layer is model-agnostic — bobine uses it for converter models
+(RapidOCR, layout, tables, formulas) without ever touching `JinaV5`.
+The recipe, in full (reference implementation: bobine's
+`engine::session_builder`):
+
+```rust
+let builder = ort::session::Session::builder()?;
+let tuned = embroider::SessionPolicy::ort_defaults().apply(builder)?;
+let session = embroider::apply_providers(tuned, providers)?.commit_from_file(path)?;
+```
+
+plus `embroider::cuda_available()` for the auto-GPU decision and
+`embroider::report()` for the which-binary-serves-what diagnostic.
+
+The boundary is deliberate:
+
+| embroider owns | Consumer owns |
+|---|---|
+| Session tuning (`SessionPolicy`), provider fallback (`apply_providers`), CUDA probe, dylib report, `owner/name` parsing | Model fetch (own HF client, own repo constants), preprocessing, IO wiring, decoding |
+
+Generic fetch + session-build helpers (a model-agnostic "N files from
+repo R" to complement the Jina-shaped acquisition) are a natural
+future addition — additive, no contract risk. Inference itself stays
+with the consumer by design.
 
 ## Runtime: ONNX Runtime discovery
 
