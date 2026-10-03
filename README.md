@@ -41,13 +41,6 @@ vector space, or gets a loud error instead of a silent fork.
 policy, provider fallback, CUDA probe — while owning its own
 converter-model sessions (RapidOCR, layout, tables, formulas).
 
-### Origin
-
-A clean move out of OKFgraph's `rust/okf-embed` — an exact port of
-`EmbeddingEngine._encode` — still pinned against a numpy/transformers
-replication by OKFgraph's parity harness (`tests/test_parity.py`, max abs
-diff ≤ 1e-5).
-
 ### One backend
 
 No torch / transformers / optimum in the hot path, so every vector in an
