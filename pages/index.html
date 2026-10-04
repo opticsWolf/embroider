@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c1017">
+  <title>embroider — frozen Jina v5 embeddings over ONNX Runtime</title>
+  <meta name="description" content="Jina v5 text and image embeddings served through ONNX Runtime from a Rust core, with Python bindings. One frozen vector-space contract, shared session policy, no torch in the hot path.">
+  <link rel="preload" href="fonts/space-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css?v=embroider-1">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<nav class="top" aria-label="Main navigation">
+  <a class="brand" href="#top">
+    <svg class="mark" viewBox="0 0 28 28" fill="none" aria-hidden="true"><path d="M6 7 21 5 23 21 7 23 6 7Zm0 0 17 14M21 5 7 23" stroke="currentColor" stroke-width="1.5"/><g fill="currentColor"><circle cx="6" cy="7" r="3"/><circle cx="21" cy="5" r="3"/><circle cx="23" cy="21" r="3"/><circle cx="7" cy="23" r="3"/></g></svg>
+    embroider <span class="release">0.3.1</span>
+  </a>
+  <div class="links">
+    <a href="#positioning">Why embroider</a>
+    <a href="#contract">Contract</a>
+    <a href="#workflow">Workflow</a>
+    <a href="#features">Capabilities</a>
+    <a href="#surfaces">Use it</a>
+    <a href="#stack">The stack</a>
+  </div>
+  <a class="source-link" href="https://github.com/opticsWolf/embroider">GitHub <span aria-hidden="true">↗</span></a>
+</nav>
+
+<header class="hero" id="top">
+  <svg class="hero-connections" viewBox="0 0 1120 720" fill="none" aria-hidden="true">
+    <g stroke="currentColor" stroke-width="1"><path d="M460 74 742 34 1034 148 1080 418 836 630 568 514 460 74Z"/><path d="M742 34 836 630M1034 148 568 514M460 74 1080 418"/></g>
+    <g fill="currentColor"><circle cx="460" cy="74" r="4"/><circle cx="742" cy="34" r="4"/><circle cx="1034" cy="148" r="4"/><circle cx="1080" cy="418" r="4"/><circle cx="836" cy="630" r="4"/><circle cx="568" cy="514" r="4"/></g>
+  </svg>
+  <div class="hero-copy">
+    <h1>Frozen vectors.<br><span>Local inference.</span></h1>
+    <p class="sub">Jina v5 text <strong>and image</strong> embeddings over ONNX Runtime — a Rust core with Python bindings, and <strong>one contract every consumer shares</strong>.</p>
+    <p class="hero-detail">embroider turns text and images into vectors: task prefix → tokenize → ONNX forward → last-token pooling → L2 → Matryoshka truncate → re-normalise. No torch, transformers, or optimum in the hot path, so every vector in an index stays directly comparable — or the encode fails loudly instead of silently forking the space.</p>
+    <div class="cta">
+      <a class="btn" href="#workflow">Embed your first text <span aria-hidden="true">↓</span></a>
+      <a class="text-link" href="https://github.com/opticsWolf/embroider#what-it-is">Read the documentation <span aria-hidden="true">↗</span></a>
+    </div>
+  </div>
+  <figure class="knowledge-preview">
+    <figcaption><span class="status-dot" aria-hidden="true"></span> Same bytes in, same vectors out</figcaption>
+    <div class="file-preview">
+      <div class="file-path">embed.py <span>Python surface</span></div>
+      <pre tabindex="0" aria-label="Illustrative embedding session"><code><span class="syntax-key">from</span> embroider <span class="syntax-key">import</span> JinaV5
+
+m = JinaV5.<span class="syntax-link">open</span>(
+  <span class="syntax-muted">"jinaai/jina-embeddings-v5-text-small-retrieval"</span>)
+v = m.<span class="syntax-link">encode</span>(<span class="syntax-muted">"what do badgers eat?"</span>, task=<span class="syntax-muted">"query"</span>)
+<span class="syntax-muted"># → 512-dim unit vector, golden-pinned</span></code></pre>
+    </div>
+    <div class="preview-index"><span>Load once, encode often</span><span>prefix · pool · truncate · norm</span></div>
+    <div class="preview-query"><span class="syntax-muted">The rule downstream indexes rely on</span><strong>“Never mix what you can't compare.”</strong><p>Same model, precision, tuning, and length — or re-embed.<br>Anything else raises instead of drifting.</p></div>
+    <p class="preview-caption">Illustrative session · weights download once, then reuse the cache.</p>
+  </figure>
+  <ul class="principles" aria-label="At a glance">
+    <li>Jina v5 text + vision</li><li>ONNX Runtime only</li><li>Golden-pinned contract</li><li>Rust core · Python wheels</li>
+  </ul>
+</header>
+
+<main id="main">
+<section id="positioning" aria-labelledby="positioning-title">
+  <div class="section-intro">
+    <h2 id="positioning-title">Keep the space.<br>Lose the framework.</h2>
+    <div class="prose">
+      <p>Embedding pipelines drift when every consumer brings its own tokenizer, pooling, prefix, and runtime. embroider freezes the whole chain in one Rust engine: the task prefix is load-bearing (<code>query</code> ↔ <code>Query:</code>, <code>document</code> ↔ <code>Document:</code>), pooling reads the last attended token, and Matryoshka truncation follows a fixed ladder — then the vector is re-normalised.</p>
+      <p>Two consumers share it differently. <strong>OKFgraph</strong> uses the full Jina v5 text + vision contract for its graph. <strong>bobine</strong> reuses only the ONNX plumbing — session policy, provider fallback, CUDA probe — while owning its own converter-model sessions. Sharing runtime policy never means sharing one global inference session.</p>
+    </div>
+  </div>
+  <ol class="flow" aria-label="Embedding contract">
+    <li><span class="flow-label">Prefix</span><strong>Task decides the space</strong><p>Query vs document prefixes, idempotent</p></li>
+    <li><span class="flow-label">Encode</span><strong>Tokenize + ONNX forward</strong><p>Session IO discovered at load</p></li>
+    <li><span class="flow-label">Pool</span><strong>Last token, then L2</strong><p>int64 ids, float output, clamped index</p></li>
+    <li><span class="flow-label">Shape</span><strong>Truncate, re-normalise</strong><p>Matryoshka ladder, 32–1024 dims</p></li>
+  </ol>
+  <aside class="memory-vault" id="contract" aria-labelledby="contract-title" style="scroll-margin-top:120px">
+    <div class="memory-heading">
+      <svg class="memory-symbol" viewBox="0 0 64 64" fill="none" aria-hidden="true"><rect x="9" y="9" width="46" height="46" rx="8" stroke="currentColor" stroke-width="1.5"/><path d="m20 23 24-3-4 24-20-21Zm0 0 12 22" stroke="currentColor" stroke-width="1.5"/><g fill="currentColor"><circle cx="20" cy="23" r="3"/><circle cx="44" cy="20" r="3"/><circle cx="40" cy="44" r="3"/><circle cx="32" cy="45" r="3"/></g></svg>
+      <h3 id="contract-title">One frozen contract, <br>checked by fixtures.</h3>
+      <p>Vectors are a promise.<br>This one is test-pinned.</p>
+    </div>
+    <div class="memory-body">
+      <p><code>fixtures/golden_jina_v5_text_small.json</code> pins the vector space: 4 canonical texts × Query/Document prefixes × dims 64/512, plus exact token counts. Consumers vendor it and assert live vectors at <code>abs=1e-6</code> — enough to catch a wrong model, pooling, prefix, or truncation, immune to cross-CPU noise. Vision host math is pinned the same way under <code>fixtures/vision/</code>, bitwise.</p>
+      <ol class="memory-loop" aria-label="Contract lifecycle">
+        <li><strong>Pin</strong><span>Goldens generated once per contract.</span></li>
+        <li><strong>Assert</strong><span>Downstream suites check live output.</span></li>
+        <li><strong>Version</strong><span>A contract change is a new minor + re-index notice.</span></li>
+      </ol>
+      <p class="memory-storage">Unchanged by the <code>max_length</code>, <code>precision</code>, and <code>cpu_arena</code> parameters for short inputs at defaults — parameters tune the run, never the space. Do not mix precisions or tuning levels in one index: FP32 vs FP16 and Level1 vs Level3 both shift bits.</p>
+    </div>
+  </aside>
+</section>
+
+<section id="workflow" aria-labelledby="workflow-title">
+  <div class="section-intro">
+    <h2 id="workflow-title">From install<br>to verified vectors.</h2>
+    <div class="prose"><p>One runtime, one lazy session, one assertion. The example below follows the standard path: install the wheel, open the default text model, encode with the task that matches your index, add vision only where a text-nano graph needs it, and verify against the goldens.</p><p>Model weights download on first open and reuse the cache afterwards. <code>JinaV5.open</code> is the single expensive step — token counting, search setup, and health checks stay cold until the first real encode.</p></div>
+  </div>
+  <div class="setup">
+    <div><h3>Install the wheel</h3><p>Linux / Windows / macOS-arm64 wheels for Python 3.11–3.13. Exactly one ONNX Runtime alongside: CPU or GPU, never both — they share a module name and clobber each other.</p><pre tabindex="0" aria-label="Installation commands"><code>pip install embroider
+pip install onnxruntime==1.29.0
+
+# Override discovery only when needed:
+# export ORT_DYLIB_PATH=/path/to/onnxruntime.dll</code></pre></div>
+    <div><h3>Registry at a glance</h3><pre tabindex="0" aria-label="Model registry"><code># small-retrieval (default): fp32 + fp16 mirror
+# nano-retrieval: fp32 / fp16 / int8 (vision partner)
+# omni-nano vision: fp32 / fp16 → text-nano space
+from embroider import available_models
+available_models()</code></pre><p class="small-copy">Unknown ids fall through to the legacy path: the id is treated as an HF repo holding <code>onnx/model.onnx</code>. Fully local weights skip acquisition via <code>open_files</code>.</p></div>
+  </div>
+  <div class="timeline">
+    <article class="step">
+      <div class="step-copy"><span class="step-no">1</span><h3>Open the text model once.</h3><p>Construction validates the import and device string eagerly; the ONNX session opens lazily on the first encode. <code>device="auto"</code> uses CUDA when the loaded ORT exposes a usable execution provider, else CPU with a warning. <code>precision="auto"</code> follows the landed device — CUDA → FP16, CPU → FP32 — so a missing GPU degrades to FP32 weights instead of stranding FP16 on CPU.</p></div>
+      <div class="example"><span class="example-label">Lazy session</span><pre tabindex="0" aria-label="Opening the model"><code>from embroider import JinaV5
+
+m = JinaV5.open(
+  "jinaai/jina-embeddings-v5-text-small-retrieval",
+  truncate_dim=512, device="auto",
+  precision="auto", max_length=None)</code></pre></div>
+    </article>
+    <article class="step">
+      <div class="step-copy"><span class="step-no">2</span><h3>Encode with the right task.</h3><p><code>task</code> is load-bearing: swapped prefixes silently fork the space. Batch encoding stays sequential by design — padded batches waste attention compute on variable-length docs to save milliseconds of boundary overhead. The GIL is released during encode; a failed open is cached and re-raised so config errors fail fast once.</p></div>
+      <div class="example"><span class="example-label">Queries and documents</span><pre tabindex="0" aria-label="Encoding commands"><code>v  = m.encode("what do badgers eat?", task="query")
+vs = m.encode_batch(["a", "b"], task="document")
+
+m.dim()          # effective truncate_dim
+m.used_cuda()    # where it actually landed
+m.precision()    # effective weights
+m.count_tokens("long text...")  # session max_length applies</code></pre></div>
+    </article>
+    <article class="step">
+      <div class="step-copy"><span class="step-no">3</span><h3>Add vision where it belongs.</h3><p>Image bytes land in the text-nano space — the registry's <code>text_partner</code> pin refuses anything else. Resize on the caller side to exactly <code>vision_target_size(h, w)</code> with Pillow bicubic; anything else is rejected rather than embedded under the wrong resolution contract. Explicit fp16-on-CPU is an error here: the graph stalls on CPU, so fail-fast beats a hung batch.</p></div>
+      <div class="example"><span class="example-label">Image into text-nano space</span><pre tabindex="0" aria-label="Vision commands"><code>from embroider import JinaV5Vision, vision_target_size
+from PIL import Image
+import numpy as np
+
+v = JinaV5Vision.open()  # omni-nano vision, auto precision
+h, w = vision_target_size(img.height, img.width)
+rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
+vec = v.encode_image(rgb, h, w)</code></pre></div>
+    </article>
+    <article class="step">
+      <div class="step-copy"><span class="step-no">4</span><h3>Stay cold when you only count.</h3><p><code>JinaTokenizer.open</code> fetches only <code>tokenizer.json</code> — about half a second cold, roughly 9× cheaper than a session open — and never truncates, so counts report true length. <code>open_files</code> variants skip every download for air-gapped runs; the ONNX sidecar must sit next to the model file, as in the HF cache layout.</p></div>
+      <div class="example"><span class="example-label">Counts and local files</span><pre tabindex="0" aria-label="Tokenizer commands"><code>from embroider import JinaTokenizer
+
+t = JinaTokenizer.open(
+  "jinaai/jina-embeddings-v5-text-small-retrieval")
+t.count_tokens("...")  # true length, never truncated
+
+m = JinaV5.open_files("model.onnx", "tokenizer.json")</code></pre></div>
+    </article>
+    <article class="step">
+      <div class="step-copy"><span class="step-no">5</span><h3>Prove the space, tune the run.</h3><p>Assert live vectors against the vendored goldens before trusting an index. Then tune the run, not the space: <code>cpu_arena=False</code> cuts peak RSS ~8× for ~1.4× encode time on FP32, and Level3 / intra = physical-cores/2 / inter = 1 stays because it measured fastest. Re-measure on new hardware or ORT before changing policy.</p></div>
+      <div class="example"><span class="example-label">Conformance and tests</span><pre tabindex="0" aria-label="Testing commands"><code>cargo test --locked   # 42 pure unit tests, no net/dylib
+
+# vision e2e (ignored): ORT 1.29 dylib + weights + CUDA
+ORT_DYLIB_PATH=.../onnxruntime.dll \
+  VISION_E2E_FP32=.../model.onnx \
+  VISION_E2E_FP16=.../model.onnx \
+  VISION_E2E_TOK=.../tokenizer.json \
+  VISION_E2E_CUDA=1 \
+  cargo test --offline --test vision_e2e -- --ignored</code></pre></div>
+    </article>
+  </div>
+</section>
+
+<section id="features" aria-labelledby="features-title">
+  <div class="section-intro"><h2 id="features-title">Small surface,<br>explicit behaviour.</h2><div class="prose"><p>embroider owns session tuning, provider fallback, the CUDA probe, dylib reporting, and <code>owner/name</code> parsing. Consumers own model fetch, preprocessing, IO wiring, and decoding. The seam is deliberate — and documented with a recipe, not just a rule.</p></div></div>
+  <div class="feat-grid">
+    <article><h3>Frozen Jina v5 text space</h3><p>Prefix → tokenize → forward → last-token pooling → L2 → Matryoshka truncate → re-normalise. Session IO is discovered at load; <code>token_type_ids</code> feeds only when declared, output prefers <code>last_hidden_state</code>.</p></article>
+    <article><h3>Vision into text-nano space</h3><p>One image per call over the dynamic-grid graph; host grid tensors are bit-identical to transformers and fixture-pinned. Every encode re-checks <code>seq == image_tokens + 15</code> so a wrong tokenizer fails loudly.</p></article>
+    <article><h3>Precision that follows the device</h3><p><code>auto</code> resolves after landing: CUDA → FP16, CPU → FP32. Explicit fp16-on-CPU warns for text and errors for vision. Nano alone offers explicit int8 — never automatic, never mixed into one index.</p></article>
+    <article><h3>Memory policy with measurements</h3><p>CPU arena off by default (15.3 → 1.9 GB peak on FP32 for ~1.4× time). Text tuning is Level3 with intra = physical-cores/2, kept because it measured fastest on a 32-logical-core Windows box.</p></article>
+    <article><h3>Reuse without Jina</h3><p>bobine builds converter sessions from <code>SessionPolicy::ort_defaults()</code> + <code>apply_providers</code> + <code>cuda_available()</code> + <code>report()</code> — never touching <code>JinaV5</code>. Generic fetch helpers remain a natural, additive future.</p></article>
+    <article><h3>One shared ORT binary</h3><p><code>ort</code> loads dynamically; resolution is <code>ORT_DYLIB_PATH</code> first, else the pip-installed build. OKFgraph resolves it before the native import so ingest and indexing share one binary — no version or CUDA drift.</p></article>
+    <article><h3>Fail fast at encode time</h3><p>No fallback once encoding: vectors must stay bit-comparable within one index. Bad arguments raise before any IO; load failures carry the full anyhow chain. Unknown providers warn and skip; missing CUDA warns and lands on CPU.</p></article>
+    <article><h3>Air-gapped and countable</h3><p>Tokenizer-only opens count exact tokens without a session; <code>open_files</code> paths skip every download. Same bytes in give same vectors out — test-pinned against HF acquisition.</p></article>
+  </div>
+</section>
+
+<section id="retrieval" aria-labelledby="prec-title">
+  <div class="section-intro"><h2 id="prec-title">Precision is a<br>deployment choice.</h2><div class="prose"><p>Weights shift vectors the way tuning levels do — so precision is explicit, reported, and never mixed inside one index. The default follows the machine you actually landed on, not the one you asked for.</p><p>On Windows, watch for a stale <code>C:\Windows\System32\onnxruntime.dll</code> (v1.17.x in the wild): with <code>ORT_DYLIB_PATH</code> unset, <code>ort</code> may load it and die with <code>BadVersion</code>. Point the variable at the venv build — the same pitfall bobine documents.</p></div></div>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Precision behaviour">
+    <table><caption>How precision resolves</caption><thead><tr><th scope="col">Request</th><th scope="col">On CUDA</th><th scope="col">On CPU</th><th scope="col">Notes</th></tr></thead><tbody>
+      <tr><th scope="row"><code>auto</code> <span class="tag">Default</span></th><td>FP16 weights</td><td>FP32 weights</td><td>Follows the landed device</td></tr>
+      <tr><th scope="row"><code>fp32</code></th><td>FP32 weights</td><td>FP32 weights</td><td>Pinned, always honoured</td></tr>
+      <tr><th scope="row"><code>fp16</code></th><td>FP16 weights</td><td>FP16 + loud warning (text); error (vision)</td><td>Default id maps to the FP16 mirror repo</td></tr>
+      <tr><th scope="row"><code>int8</code></th><td>Nano only, explicit</td><td>Nano only, explicit</td><td>Never automatic</td></tr>
+    </tbody></table>
+  </div>
+  <div class="impl"><div><h3>Sessions without Jina.</h3><p>The policy layer is model-agnostic. bobine's <code>engine::session_builder</code> is the reference implementation — tune a builder, apply providers with fallback, commit from file. Inference itself stays with the consumer by design.</p></div><pre tabindex="0" aria-label="Session policy recipe"><code>// tuned session over your own model file:
+let builder = ort::session::Session::builder()?;
+let tuned = embroider::SessionPolicy::ort_defaults()
+    .apply(builder)?;
+let session = embroider::apply_providers(tuned, providers)?
+    .commit_from_file(path)?;
+
+// diagnostics for logs:
+let rep = embroider::report();
+let cuda = embroider::cuda_available();</code></pre></div>
+</section>
+
+<section id="surfaces" aria-labelledby="surfaces-title">
+  <div class="section-intro"><h2 id="surfaces-title">One engine.<br>Two languages.</h2><div class="prose"><p>Python covers the Jina contract end to end; Rust exposes the same engine plus the session-policy API other models build on. The pure-Rust crate builds without Python — the <code>extension-module</code> Cargo feature gates PyO3 and is enabled only for wheel builds, the same pattern bobine uses.</p></div></div>
+  <div class="doors">
+    <article><h3>Python for embeddings</h3><p>Open lazily, encode with a task, introspect the landing. Docs live beside the code: quick reference for copy-paste, compatibility matrix for the release story.</p><pre tabindex="0" aria-label="Python example"><code>from embroider import JinaV5
+
+m = JinaV5.open(
+  "jinaai/jina-embeddings-v5-text-nano-retrieval",
+  truncate_dim=512)
+v = m.encode("hello", task="document")</code></pre><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/quickref.md">Quick reference <span aria-hidden="true">↗</span></a></article>
+    <article><h3>Rust for policy</h3><p>Parse device and precision requests, resolve precision against the landed device, parse <code>owner/name</code> ids, and build tuned sessions for any ONNX model — not just Jina.</p><pre tabindex="0" aria-label="Rust example"><code>let device = embroider::DeviceReq::parse("auto")?;
+let prec = embroider::Precision::parse("fp16")?;
+let landed = prec.resolve(used_cuda);
+let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-link" href="https://docs.rs/embroider">API docs <span aria-hidden="true">↗</span></a></article>
+    <article><h3>Consumers for graphs</h3><p>OKFgraph pins the text + vision contract and vendors the goldens; bobine pins the session policy for converter models. The compat matrix records which trio shipped together — and why a newer embroider minor without an OKFgraph update stays supported.</p><pre tabindex="0" aria-label="Consumer pins"><code>embroider = "0.3"   # shared ORT plumbing
+# okfgraph 0.8.x ↔ embroider 0.3.x ↔ ORT 1.29.0
+# okfgraph 0.7.x ↔ embroider 0.2.x ↔ ORT 1.29.0</code></pre><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">Compatibility <span aria-hidden="true">↗</span></a></article>
+  </div>
+</section>
+
+<section id="stack" aria-labelledby="stack-title">
+  <div class="section-intro"><h2 id="stack-title">Part of a trio,<br>usable alone.</h2><div class="prose"><p>embroider ships independently on PyPI and crates.io. It also anchors the embedding side of the OKF stack: OKFgraph owns the knowledge workflow and the embedding-space pins, bobine converts documents — each reusing embroider where it fits, owning its sessions everywhere else.</p><p>CPU and GPU runtime distributions are alternatives: install one ONNX Runtime, not both. The wheels cover Linux, Windows, and macOS-arm64 for Python 3.11–3.13.</p></div></div>
+  <div class="package" id="okfgraph">
+    <div class="package-heading"><h3>OKFgraph <span class="ver">0.9.0</span></h3><p>Local knowledge graph + agent memory</p><a class="text-link" href="https://opticswolf.github.io/OKFgraph/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/OKFgraph">Repository <span aria-hidden="true">↗</span></a></div>
+    <div class="prose"><p>Uses the full Jina v5 text + vision contract: hybrid retrieval over LadybugDB, model-free PPR when no session is loaded, golden-pinned parity against a numpy replication. The first embedding operation downloads weights; everything cold stays cold until then.</p></div>
+  </div>
+  <div class="package" id="bobine">
+    <div class="package-heading"><h3>bobine <span class="ver">0.5.13</span></h3><p>Documents → Markdown</p><a class="text-link" href="https://opticswolf.github.io/bobine/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/bobine">Repository <span aria-hidden="true">↗</span></a></div>
+    <div class="prose"><p>Reuses the ONNX plumbing — session policy, provider fallback, CUDA probe — for TexTeller, layout, OCR, and table sessions it fetches and owns itself. The recipe is public: any compatible model can follow it with no registry change.</p></div>
+  </div>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Package versions"><table><caption>Published stack</caption><thead><tr><th scope="col">Responsibility</th><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
+    <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.9.0</td></tr>
+    <tr><th scope="row">PDF / Office conversion</th><td><a href="https://pypi.org/project/bobine/">bobine</a></td><td>0.5.13</td></tr>
+    <tr><th scope="row">Jina embeddings · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.3.1</td></tr>
+    <tr><th scope="row">Inference runtime (CPU or GPU)</th><td>onnxruntime</td><td>1.29.0</td></tr>
+  </tbody></table></div>
+  <aside class="note"><h3>Open code. Separately licensed weights.</h3><p>embroider's code is MIT OR Apache-2.0. Its registry weights are CC BY-NC 4.0 — every built-in model is non-commercial, including the FP16 mirror and the vision export. Review the <a href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">licence table</a> before commercial use or redistribution.</p></aside>
+</section>
+
+<section class="closing" aria-labelledby="closing-title"><h2 id="closing-title">Start with one encode<br>you can trust.</h2><p>Open the default model, encode a query and a document, assert the goldens. Then hand the vectors to a graph — or the policy to your own model.</p><div class="cta"><a class="btn" href="#workflow">Follow the workflow <span aria-hidden="true">↑</span></a><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/quickref.md">Explore the quick reference <span aria-hidden="true">↗</span></a></div></section>
+</main>
+<footer><a class="brand" href="#top">embroider</a><p>Frozen vectors, local inference.</p><div><a href="https://github.com/opticsWolf/embroider">Source</a><a href="https://github.com/opticsWolf/embroider#what-it-is">Documentation</a><a href="https://pypi.org/project/embroider/">PyPI</a><a href="https://crates.io/crates/embroider">crates.io</a><a href="https://opticswolf.github.io/OKFgraph/">OKFgraph</a><a href="https://opticswolf.github.io/bobine/">bobine</a></div></footer>
+</body>
+</html>

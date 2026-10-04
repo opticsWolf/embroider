@@ -7,6 +7,7 @@
 [![PyPI](https://img.shields.io/pypi/v/embroider)](https://pypi.org/project/embroider/)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://www.python.org/)
 [![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
+[![Website](https://img.shields.io/badge/website-embroider-blue)](https://opticswolf.github.io/embroider/)
 
 ## Contents
 
