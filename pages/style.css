@@ -12,7 +12,7 @@
   --ink: #e7e6f2;
   --muted: #abacc1;
   --accent: #b99ffa;
-  --memory: #71c9fa;
+  --memory: #82c7f0;
   --line: #3e3855;
   --code: #0f0e18;
   --measure: 1120px;
@@ -71,9 +71,9 @@ pre code { font-size: inherit; overflow-wrap: normal; }
 .file-preview pre { border: 0; padding: 0; background: transparent; font-size: 13px; }
 .syntax-muted { color: var(--muted); }
 .syntax-key { color: #c2adf3; }
-.syntax-link { color: #6dbbe8; }
+.syntax-link { color: #7ebadd; }
 .preview-index { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; margin: 0 24px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-.preview-query { padding: 22px 24px 12px; background: #022a4166; margin-top: 14px; }
+.preview-query { padding: 22px 24px 12px; background: #092a3c66; margin-top: 14px; }
 .preview-query > span { font-size: 12px; display: block; margin-bottom: 6px; color: var(--memory); }
 .preview-query strong { font: 500 19px/1.4 var(--display); }
 .preview-query p { font-size: 14px; color: var(--muted); margin-top: 8px; }
@@ -94,16 +94,16 @@ section { padding: 88px 0; border-top: 1px solid var(--line); }
 .flow-label { color: var(--muted); font-size: 12px; display: block; margin-bottom: 8px; }
 .flow strong { display: block; font: 500 18px/1.3 var(--display); }
 .flow p { color: var(--muted); font-size: 14px; margin-top: 8px; }
-.memory-vault { display: grid; grid-template-columns: .85fr 1.4fr; gap: 64px; position: relative; padding: 36px; border: 1px solid #2e6386; border-radius: 10px; background: linear-gradient(115deg, #022a41, var(--panel) 75%); box-shadow: 0 16px 32px #05080d40; scroll-margin-top: 120px; }
+.memory-vault { display: grid; grid-template-columns: .85fr 1.4fr; gap: 64px; position: relative; padding: 36px; border: 1px solid #38637e; border-radius: 10px; background: linear-gradient(115deg, #092a3c, var(--panel) 75%); box-shadow: 0 16px 32px #05080d40; scroll-margin-top: 120px; }
 .memory-heading, .memory-body { min-width: 0; }
 .memory-symbol { width: 56px; height: 56px; color: var(--memory); margin-bottom: 18px; }
 .memory-heading h3 { font-size: 27px; color: var(--ink); }
-.memory-heading p { color: #abcce5; font-size: 15px; }
-.memory-body > p { color: #b5d2e9; font-size: 16px; }
-.memory-loop { list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; padding: 20px 0; margin: 24px 0; border-block: 1px solid #2c516b; }
+.memory-heading p { color: #b0ccdf; font-size: 15px; }
+.memory-body > p { color: #b9d2e3; font-size: 16px; }
+.memory-loop { list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; padding: 20px 0; margin: 24px 0; border-block: 1px solid #325165; }
 .memory-loop strong { display: block; font: 500 18px/1.4 var(--display); color: var(--memory); margin-bottom: 8px; }
-.memory-loop span { display: block; font-size: 14px; line-height: 1.6; color: #b5d2e9; }
-.memory-body .memory-storage { font-size: 14px; color: #b5d2e9; }
+.memory-loop span { display: block; font-size: 14px; line-height: 1.6; color: #b9d2e3; }
+.memory-body .memory-storage { font-size: 14px; color: #b9d2e3; }
 .note { display: grid; grid-template-columns: .85fr 1.4fr; gap: 72px; padding: 28px 32px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
 .note h3 { font-size: 18px; margin: 0; }
 .note p { color: var(--muted); font-size: 15px; }
@@ -130,7 +130,7 @@ thead th { color: var(--muted); font-size: 12px; font-weight: 600; }
 tbody th { font-weight: 500; color: var(--ink); }
 td { color: var(--muted); }
 tbody tr:hover { background: var(--panel); }
-.tag { display: inline-block; color: #6dbbe8; font-size: 11px; margin-left: 6px; }
+.tag { display: inline-block; color: #7ebadd; font-size: 11px; margin-left: 6px; }
 .impl { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; margin-top: 44px; align-items: start; }
 .impl p { color: var(--muted); font-size: 16px; }
 .doors { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 32px; }
