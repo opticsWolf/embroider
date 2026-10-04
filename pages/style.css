@@ -11,7 +11,7 @@
   --panel: #141d2a;
   --ink: #edf2f9;
   --muted: #acbbce;
-  --accent: #8ac4ff;
+  --accent: #b8a6ff;
   --memory: #9adecc;
   --line: #2a384b;
   --code: #101722;
@@ -59,8 +59,8 @@ pre code { font-size: inherit; overflow-wrap: normal; }
 .hero-detail { color: var(--muted); max-width: 56ch; font-size: 16px; }
 .cta { display: flex; align-items: center; flex-wrap: wrap; gap: 20px 24px; margin-top: 30px; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 18px; padding: 13px 20px; min-height: 48px; background: var(--accent); color: #101d2d; font-size: 15px; font-weight: 600; text-decoration: none; border-radius: 5px; box-shadow: 0 5px 16px #03070d66; transition: background .15s ease, box-shadow .15s ease; }
-.btn:hover { background: #b8dcff; color: #101d2d; box-shadow: 0 8px 24px #03070d99; }
-.btn:active { background: #78b6f2; }
+.btn:hover { background: #d0c3ff; color: #101d2d; box-shadow: 0 8px 24px #03070d99; }
+.btn:active { background: #a78df2; }
 .text-link { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; font-size: 14px; }
 .knowledge-preview { margin: 0; border: 1px solid #476587; border-radius: 10px; overflow: hidden; background: linear-gradient(155deg, #1b2a3e, var(--panel) 60%); box-shadow: 0 24px 56px #05080d80; }
 .knowledge-preview figcaption { display: flex; align-items: center; gap: 10px; padding: 18px 24px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
