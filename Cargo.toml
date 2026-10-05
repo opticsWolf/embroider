@@ -1,12 +1,13 @@
 [package]
 name = "embroider"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
+authors = ["opticsWolf <opticswolf@protonmail.com>"]
 description = "Text embroidery: Jina v5 text embeddings via ONNX Runtime (Rust core, optional PyO3 bindings) — shared by bobine and okfgraph"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/opticsWolf/embroider"
-homepage = "https://github.com/opticsWolf/embroider"
+homepage = "https://opticswolf.github.io/embroider/"
 keywords = ["embeddings", "onnx", "jina", "text", "nlp"]
 categories = ["text-processing"]
 

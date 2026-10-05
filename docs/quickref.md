@@ -113,6 +113,27 @@ t = JinaTokenizer.open_files("tokenizer.json")   # no download at all
 t.count_tokens("...")   # true length, never truncated (~0.5 s cold)
 ```
 
+## Cache inspection (Python)
+
+```python
+from embroider import cache_info
+
+info = cache_info("jinaai/jina-embeddings-v5-text-small-retrieval", precision="fp16")
+info["cached"], info["repo"], info["snapshot_path"], info["disk_usage_bytes"]
+info["files"]   # per-file paths: model, sidecar (if any), tokenizer.json
+
+# full signature: cache_info(model_id, revision=None, cache_dir=None, precision=None)
+# offline only: never downloads, never opens a session, never probes the device
+```
+
+Resolves the artifact exactly like `open()` (`lookup_model` →
+`artifact_for`): the default id at fp16 reports the mirror repo,
+multi-file repos list their `.onnx_data` sidecar. `cached=True` means an
+offline `open()` would succeed — model file + `tokenizer.json` present;
+a missing sidecar only warns at open and keeps `cached` true.
+`precision=None` reads fp32 (side-effect free by contract); 'auto' and
+bare legacy ids raise `ValueError` before any I/O.
+
 ## Rust: sessions without Jina
 
 ```rust
@@ -133,6 +154,17 @@ let (owner, name) = embroider::parse_owner_name("org/repo")?;
 let device = embroider::DeviceReq::parse("auto")?;        // auto | cpu | cuda (gpu alias)
 let prec = embroider::Precision::parse("fp16")?;          // auto | fp32 | fp16 | int8
 let landed = prec.resolve(used_cuda);   // pass the LANDED device, never the request
+
+// offline cache inspection (Python `embroider.cache_info` underneath):
+// never the network, never a session, no device probe — precision must be explicit
+let rep = embroider::cache_info(
+    "jinaai/jina-embeddings-v5-text-small-retrieval",
+    None,                       // revision: None = main
+    None,                       // cache_dir: None = env-resolved hub cache
+    embroider::Precision::Fp32,
+)?;
+// rep: CacheReport { repo, precision, cache_dir, files, cached,
+//                    snapshot_path, disk_usage_bytes }
 ```
 
 ## Errors
@@ -156,7 +188,7 @@ new minor version + re-index-everything notice.
 ## Testing
 
 ```bash
-cargo test --locked                      # 42 pure unit tests (no net/dylib)
+cargo test --locked                      # 45 pure unit tests (no net/dylib)
 # vision e2e (ignored): needs ORT 1.29 dylib + weight files + CUDA ideally
 ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
   VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \

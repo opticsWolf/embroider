@@ -4,10 +4,17 @@ build-backend = "maturin"
 
 [project]
 name = "embroider"
-version = "0.3.1"
+version = "0.3.2"
 description = "Jina v5 text embeddings via ONNX Runtime (Rust core, PyO3 bindings)"
 readme = "README.md"
 requires-python = ">=3.11"
+authors = [
+    { name = "opticsWolf", email = "opticswolf@protonmail.com" },
+]
+
+[project.urls]
+Homepage = "https://opticswolf.github.io/embroider/"
+Repository = "https://github.com/opticsWolf/embroider"
 
 [tool.maturin]
 bindings = "pyo3"

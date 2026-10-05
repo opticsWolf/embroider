@@ -32,8 +32,8 @@ pub mod probe;
 pub mod providers;
 
 pub use acquire::{
-    artifact_for, builtin_models, fetch_tokenizer_file, lookup_model,
-    parse_owner_name, repo_for_precision, Artifact, ModelSpec,
+    artifact_for, builtin_models, cache_info, fetch_tokenizer_file, lookup_model,
+    parse_owner_name, repo_for_precision, Artifact, CacheReport, ModelSpec,
     FP16_TEXT_MODEL, FP32_TEXT_MODEL, NANO_TEXT_MODEL, TEXT_NANO, TEXT_SMALL,
 };
 pub use diag::{report, OrtReport};
@@ -351,6 +351,67 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
         .collect()
 }
 
+/// Offline cache inspection (see [`acquire::cache_info`]): answers "is
+/// this model already cached, and where?" without a session, a download,
+/// or a device probe. `precision=None` reads fp32 (side-effect free by
+/// contract); 'auto' and bare legacy ids raise ValueError before any I/O.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "cache_info")]
+#[pyo3(signature = (model_id, revision=None, cache_dir=None, precision=None))]
+fn cache_info_py<'py>(
+    py: Python<'py>,
+    model_id: &str,
+    revision: Option<String>,
+    cache_dir: Option<String>,
+    precision: Option<&str>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    // Argument validation fires before any I/O, mirroring open()'s checks
+    // as ValueError (the rest is offline file reading and cannot fail).
+    let precision = match precision {
+        // Documented, side-effect-free default: no device probe here.
+        None => Precision::Fp32,
+        Some(s) => Precision::parse(s)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+    };
+    if matches!(precision, Precision::Auto) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "cache_info never probes the device, so precision='auto' cannot be resolved; \
+             pass an explicit precision ('fp32', 'fp16' or 'int8')",
+        ));
+    }
+    // Registered ids skip owner/name parsing (the vision id is
+    // deliberately short); legacy ids ARE the repo and must parse.
+    if lookup_model(model_id).is_none() {
+        parse_owner_name(model_id)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    }
+    let rep = acquire::cache_info(
+        model_id,
+        revision.as_deref(),
+        cache_dir.map(PathBuf::from),
+        precision,
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+
+    let out = pyo3::types::PyDict::new(py);
+    out.set_item("model_id", rep.model_id)?;
+    out.set_item("repo", rep.repo)?;
+    out.set_item("precision", rep.precision.as_str())?;
+    out.set_item("cache_dir", rep.cache_dir.display().to_string())?;
+    let files = pyo3::types::PyDict::new(py);
+    for (name, path) in &rep.files {
+        files.set_item(name, path.as_ref().map(|p| p.display().to_string()))?;
+    }
+    out.set_item("files", files)?;
+    out.set_item("cached", rep.cached)?;
+    out.set_item(
+        "snapshot_path",
+        rep.snapshot_path.map(|p| p.display().to_string()),
+    )?;
+    out.set_item("disk_usage_bytes", rep.disk_usage_bytes)?;
+    Ok(out)
+}
+
 #[cfg(feature = "extension-module")]
 #[pymodule]
 fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -358,6 +419,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaTokenizer>()?;
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
     m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;

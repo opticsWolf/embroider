@@ -19,7 +19,7 @@
 - [Runtime: ONNX Runtime discovery](#runtime-onnx-runtime-discovery)
 - [Text embeddings](#text-embeddings)
 - [Vision embeddings](#vision-embeddings)
-- [Running without downloads](#running-without-downloads)
+- [Running without downloads](#running-without-downloads) — tokenizer counts, offline cache checks, local files
 - [Session/threading policy](#sessionthreading-policy-measured)
 - [Failure policy](#failure-policy) · [Contract notes](#contract-notes) · [Conformance](#conformance) · [Testing](#testing)
 - [Quick reference](docs/quickref.md) — copy-paste Python/Rust surface
@@ -94,7 +94,7 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 | `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application (`apply_providers` = arena on; `apply_providers_with_arena` carries the flag) |
 | `probe` | corrected CUDA availability check (`OnceLock`-cached) |
 | `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`) + explicit `SessionPolicy` (`text_embed()` vs `ort_defaults()`) |
-| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id |
+| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`) |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
 | `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
 | `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
@@ -213,6 +213,31 @@ without the session (~0.5 s cold, 9× cheaper than a session open). It
 never truncates, so counts report true length — `JinaV5.count_tokens()`
 instead reflects the session's `max_length`.
 
+### Cache inspection (offline)
+
+`embroider.cache_info(model_id, revision=None, cache_dir=None,
+precision=None)` answers "is this model already cached, and where?"
+without opening a session or touching the network — the pre-flight check
+for UIs and config validation (okfgraph's `model_info()`):
+
+```python
+from embroider import cache_info
+
+info = cache_info("jinaai/jina-embeddings-v5-text-small-retrieval", precision="fp16")
+info["cached"], info["repo"], info["snapshot_path"], info["disk_usage_bytes"]
+info["files"]   # per-file paths: model, sidecar (if any), tokenizer.json
+```
+
+It resolves the artifact exactly like `open()` (`lookup_model` →
+`artifact_for`): the default id at `precision="fp16"` reports the FP16
+mirror repo, multi-file repos list their `.onnx_data` sidecar.
+`cached=True` means an offline `open()` would succeed — model file +
+`tokenizer.json` present (a missing sidecar only warns at open). No
+device probe: `precision=None` reads fp32; `precision="auto"` and bare
+legacy ids (`no-slash`) raise `ValueError` before any I/O. Rust
+consumers get the same inspection as `embroider::cache_info` →
+`CacheReport`.
+
 ### Explicit local files (air-gapped)
 
 `JinaV5.open_files(onnx_path, tokenizer_path, truncate_dim=512,
@@ -315,14 +340,16 @@ backs the ignored end-to-end parity test.
 
 ## Testing
 
-- **Rust unit tests** (42, pure — no network, no dylib, no tokenizer
+- **Rust unit tests** (45, pure — no network, no dylib, no tokenizer
   file): device/precision parsing, precision-follows-device resolution,
   FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,
   contract constants, `open()`/`open_files()` validation (dims,
-  `max_length`) firing before I/O, the vision registry entry, the vision
-  resize contract (incl. banker's rounding and aspect rejection), host
-  tensors bit-identical to `fixtures/vision/` on all 31 grids, the
+  `max_length`) firing before I/O, offline cache inspection
+  (`cache_info`: registry artifact resolution, fake-cache hit/partial/
+  full miss, `auto`/bad-id refusal), the vision registry entry, the
+  vision resize contract (incl. banker's rounding and aspect rejection),
+  host tensors bit-identical to `fixtures/vision/` on all 31 grids, the
   pixel pipeline bit-identical on 3 cases, and the vision fp16-on-CPU
   refusal.
 

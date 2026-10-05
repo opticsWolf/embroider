@@ -14,7 +14,7 @@
 <nav class="top" aria-label="Main navigation">
   <a class="brand" href="#top">
     <svg class="mark" viewBox="0 0 28 28" fill="none" aria-hidden="true"><path d="M6 7 21 5 23 21 7 23 6 7Zm0 0 17 14M21 5 7 23" stroke="currentColor" stroke-width="1.5"/><g fill="currentColor"><circle cx="6" cy="7" r="3"/><circle cx="21" cy="5" r="3"/><circle cx="23" cy="21" r="3"/><circle cx="7" cy="23" r="3"/></g></svg>
-    embroider <span class="release">0.3.1</span>
+    embroider <span class="release">0.3.2</span>
   </a>
   <div class="links">
     <a href="#positioning">Why embroider</a>
@@ -143,18 +143,23 @@ rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
 vec = v.encode_image(rgb, h, w)</code></pre></div>
     </article>
     <article class="step">
-      <div class="step-copy"><span class="step-no">4</span><h3>Stay cold when you only count.</h3><p><code>JinaTokenizer.open</code> fetches only <code>tokenizer.json</code> — about half a second cold, roughly 9× cheaper than a session open — and never truncates, so counts report true length. <code>open_files</code> variants skip every download for air-gapped runs; the ONNX sidecar must sit next to the model file, as in the HF cache layout.</p></div>
-      <div class="example"><span class="example-label">Counts and local files</span><pre tabindex="0" aria-label="Tokenizer commands"><code>from embroider import JinaTokenizer
+      <div class="step-copy"><span class="step-no">4</span><h3>Stay cold when you only count.</h3><p><code>JinaTokenizer.open</code> fetches only <code>tokenizer.json</code> — about half a second cold, roughly 9× cheaper than a session open — and never truncates, so counts report true length. <code>cache_info</code> answers the pre-flight question — is this model already cached, and where? — offline only: no download, no session, no device probe (<code>precision=None</code> reads fp32). <code>open_files</code> variants skip every download for air-gapped runs; the ONNX sidecar must sit next to the model file, as in the HF cache layout.</p></div>
+      <div class="example"><span class="example-label">Counts and local files</span><pre tabindex="0" aria-label="Tokenizer commands"><code>from embroider import JinaTokenizer, cache_info
 
 t = JinaTokenizer.open(
   "jinaai/jina-embeddings-v5-text-small-retrieval")
 t.count_tokens("...")  # true length, never truncated
 
+info = cache_info(
+  "jinaai/jina-embeddings-v5-text-nano-retrieval",
+  precision="fp16")
+info["cached"], info["snapshot_path"]
+
 m = JinaV5.open_files("model.onnx", "tokenizer.json")</code></pre></div>
     </article>
     <article class="step">
       <div class="step-copy"><span class="step-no">5</span><h3>Prove the space, tune the run.</h3><p>Assert live vectors against the vendored goldens before trusting an index. Then tune the run, not the space: <code>cpu_arena=False</code> cuts peak RSS ~8× for ~1.4× encode time on FP32, and Level3 / intra = physical-cores/2 / inter = 1 stays because it measured fastest. Re-measure on new hardware or ORT before changing policy.</p></div>
-      <div class="example"><span class="example-label">Conformance and tests</span><pre tabindex="0" aria-label="Testing commands"><code>cargo test --locked   # 42 pure unit tests, no net/dylib
+      <div class="example"><span class="example-label">Conformance and tests</span><pre tabindex="0" aria-label="Testing commands"><code>cargo test --locked   # 45 pure unit tests, no net/dylib
 
 # vision e2e (ignored): ORT 1.29 dylib + weights + CUDA
 ORT_DYLIB_PATH=.../onnxruntime.dll \
@@ -177,7 +182,7 @@ ORT_DYLIB_PATH=.../onnxruntime.dll \
     <article><h3>Reuse without Jina</h3><p>bobine builds converter sessions from <code>SessionPolicy::ort_defaults()</code> + <code>apply_providers</code> + <code>cuda_available()</code> + <code>report()</code> — never touching <code>JinaV5</code>. Generic fetch helpers remain a natural, additive future.</p></article>
     <article><h3>One shared ORT binary</h3><p><code>ort</code> loads dynamically; resolution is <code>ORT_DYLIB_PATH</code> first, else the pip-installed build. OKFgraph resolves it before the native import so ingest and indexing share one binary — no version or CUDA drift.</p></article>
     <article><h3>Fail fast at encode time</h3><p>No fallback once encoding: vectors must stay bit-comparable within one index. Bad arguments raise before any IO; load failures carry the full anyhow chain. Unknown providers warn and skip; missing CUDA warns and lands on CPU.</p></article>
-    <article><h3>Air-gapped and countable</h3><p>Tokenizer-only opens count exact tokens without a session; <code>open_files</code> paths skip every download. Same bytes in give same vectors out — test-pinned against HF acquisition.</p></article>
+    <article><h3>Air-gapped and countable</h3><p>Tokenizer-only opens count exact tokens without a session; <code>open_files</code> paths skip every download; <code>cache_info</code> reports what is already cached, and where — offline only, no session, no device probe. Same bytes in give same vectors out — test-pinned against HF acquisition.</p></article>
   </div>
 </section>
 
@@ -235,7 +240,7 @@ let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-
   <div class="table-wrap" tabindex="0" role="region" aria-label="Package versions"><table><caption>Published stack</caption><thead><tr><th scope="col">Responsibility</th><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
     <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.9.0</td></tr>
     <tr><th scope="row">PDF / Office conversion</th><td><a href="https://pypi.org/project/bobine/">bobine</a></td><td>0.5.13</td></tr>
-    <tr><th scope="row">Jina embeddings · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.3.1</td></tr>
+    <tr><th scope="row">Jina embeddings · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.3.2</td></tr>
     <tr><th scope="row">Inference runtime (CPU or GPU)</th><td>onnxruntime</td><td>1.29.0</td></tr>
   </tbody></table></div>
   <aside class="note"><h3>Open code. Separately licensed weights.</h3><p>embroider's code is MIT OR Apache-2.0. Its registry weights are CC BY-NC 4.0 — every built-in model is non-commercial, including the FP16 mirror and the vision export. Review the <a href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">licence table</a> before commercial use or redistribution.</p></aside>

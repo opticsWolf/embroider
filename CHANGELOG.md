@@ -3,6 +3,29 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.2] — 2026-10-05
+
+### Added
+- Offline cache inspection: `embroider.cache_info(model_id, revision=None,
+  cache_dir=None, precision=None)` (Python), backed by
+  `acquire::{cache_info, CacheReport}` (Rust). Resolves the artifact
+  exactly like `open()` (`lookup_model` → `artifact_for`) and looks each
+  required file up in the hub cache with `local_files_only` — never the
+  network, never a session, no device probe (`precision=None` reads
+  fp32; 'auto' and bare legacy ids raise `ValueError` before any I/O).
+  Returns repo (the fp16 mirror for the default id at fp16), resolved
+  precision, per-file paths, `cached` (sidecar optional, matching
+  `open()`), snapshot dir, disk usage. Replaces okfgraph's
+  `huggingface_hub`-based `model_info` workaround (missing dependency,
+  and the wrong repo for fp16/multi-file layouts).
+
+### Changed
+- Homepage metadata now points at the project website
+  (<https://opticswolf.github.io/embroider/>) in Cargo.toml and
+  pyproject.toml ([project.urls]), and the webpage reflects 0.3.2
+  (version stamps, test count, the new `cache_info` in the workflow and
+  capability sections).
+
 ## [0.3.1] — 2026-10-03
 
 ### Changed

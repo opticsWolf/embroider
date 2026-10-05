@@ -32,6 +32,12 @@ Rules:
   long docs after changing it, don't mix limits in one graph.
 - **Wheel matrix**: embroider ships cp311/cp312/cp313 wheels per platform;
   okfgraph requires Python ≥ 3.11, matching exactly.
+- **Cache inspection (0.3.2)**: `embroider.cache_info(model_id, revision,
+  cache_dir, precision)` reports what is already downloaded — offline
+  only (no download, no session, no device probe; `precision=None` reads
+  fp32). Consumers use it instead of `huggingface_hub`-based checks,
+  which crash without the dependency and resolve the wrong repo for
+  fp16/multi-file layouts.
 
 ## Model licences
 
