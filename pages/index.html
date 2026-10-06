@@ -222,6 +222,7 @@ let prec = embroider::Precision::parse("fp16")?;
 let landed = prec.resolve(used_cuda);
 let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-link" href="https://docs.rs/embroider">API docs <span aria-hidden="true">↗</span></a></article>
     <article><h3>Consumers for graphs</h3><p>OKFgraph pins the text + vision contract and vendors the goldens; bobine pins the session policy for converter models. The compat matrix records which trio shipped together — and why a newer embroider minor without an OKFgraph update stays supported.</p><pre tabindex="0" aria-label="Consumer pins"><code>embroider = "0.3"   # shared ORT plumbing
+# okfgraph 0.10.x ↔ embroider 0.3.x ↔ ORT 1.29.0
 # okfgraph 0.8.x ↔ embroider 0.3.x ↔ ORT 1.29.0
 # okfgraph 0.7.x ↔ embroider 0.2.x ↔ ORT 1.29.0</code></pre><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">Compatibility <span aria-hidden="true">↗</span></a></article>
   </div>
@@ -230,15 +231,15 @@ let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-
 <section id="stack" aria-labelledby="stack-title">
   <div class="section-intro"><h2 id="stack-title">Part of a trio,<br>usable alone.</h2><div class="prose"><p>embroider ships independently on PyPI and crates.io. It also anchors the embedding side of the OKF stack: OKFgraph owns the knowledge workflow and the embedding-space pins, bobine converts documents — each reusing embroider where it fits, owning its sessions everywhere else.</p><p>CPU and GPU runtime distributions are alternatives: install one ONNX Runtime, not both. The wheels cover Linux, Windows, and macOS-arm64 for Python 3.11–3.13.</p></div></div>
   <div class="package" id="okfgraph">
-    <div class="package-heading"><h3>OKFgraph <span class="ver">0.9.0</span></h3><p>Local knowledge graph + agent memory</p><a class="text-link" href="https://opticswolf.github.io/OKFgraph/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/OKFgraph">Repository <span aria-hidden="true">↗</span></a></div>
+    <div class="package-heading"><h3>OKFgraph <span class="ver">0.10.0</span></h3><p>Local knowledge graph + agent memory</p><a class="text-link" href="https://opticswolf.github.io/OKFgraph/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/OKFgraph">Repository <span aria-hidden="true">↗</span></a></div>
     <div class="prose"><p>Uses the full Jina v5 text + vision contract: hybrid retrieval over LadybugDB, model-free PPR when no session is loaded, golden-pinned parity against a numpy replication. The first embedding operation downloads weights; everything cold stays cold until then.</p></div>
   </div>
   <div class="package" id="bobine">
-    <div class="package-heading"><h3>bobine <span class="ver">0.5.13</span></h3><p>Documents → Markdown</p><a class="text-link" href="https://opticswolf.github.io/bobine/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/bobine">Repository <span aria-hidden="true">↗</span></a></div>
+    <div class="package-heading"><h3>bobine <span class="ver">0.6.0</span></h3><p>Documents → Markdown</p><a class="text-link" href="https://opticswolf.github.io/bobine/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/bobine">Repository <span aria-hidden="true">↗</span></a></div>
     <div class="prose"><p>Reuses the ONNX plumbing — session policy, provider fallback, CUDA probe — for TexTeller, layout, OCR, and table sessions it fetches and owns itself. The recipe is public: any compatible model can follow it with no registry change.</p></div>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Package versions"><table><caption>Published stack</caption><thead><tr><th scope="col">Responsibility</th><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
-    <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.9.0</td></tr>
+    <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.10.0</td></tr>
     <tr><th scope="row">PDF / Office conversion</th><td><a href="https://pypi.org/project/bobine/">bobine</a></td><td>0.6.0</td></tr>
     <tr><th scope="row">Jina embeddings · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.3.3</td></tr>
     <tr><th scope="row">Inference runtime (CPU or GPU)</th><td>onnxruntime</td><td>1.29.0</td></tr>
