@@ -5,3 +5,4 @@ __pycache__/
 *.pdb
 .pytest_cache/
 docs/cache-info-plan.md
+docs/cache-alignment-plan.md
