@@ -3,6 +3,31 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.3] — 2026-10-06
+
+### Added
+- Generic offline cache inspection: `acquire::cache_info_files(repo,
+  files, revision, cache_dir)` looks an arbitrary (repo, files) pair up
+  in the hub cache — same offline-only mechanics and `CacheReport`
+  contract as `cache_info`, for non-registry layouts (bobine's converter
+  models). `files` pairs each repo-relative filename with
+  required/optional; `cached` is true when all required files are
+  present; `model_id` echoes the repo and `precision` is `None` (no tier
+  here). Python surface: `embroider.cache_info_files(repo, files,
+  revision=None, cache_dir=None)` (bare names read required,
+  `(name, required)` pairs opt out); bad repos, empty lists, and
+  malformed entries raise `ValueError`/`TypeError` before any I/O.
+- `acquire::cache_info` now delegates to `cache_info_files` (one lookup
+  implementation underneath; registry resolution + id/tier patching
+  stays in `cache_info`) — behavior unchanged, pinned by a
+  delegation-parity test.
+
+### Changed
+- `CacheReport.precision` is now `Option<Precision>` (`Some` from
+  `cache_info`, `None` from `cache_info_files`). No consumer impact:
+  the struct is only constructed inside `acquire`, and the Python dict
+  keeps identical keys (`cache_info` still reports the tier string).
+
 ## [0.3.2] — 2026-10-05
 
 ### Added

@@ -134,6 +134,20 @@ a missing sidecar only warns at open and keeps `cached` true.
 `precision=None` reads fp32 (side-effect free by contract); 'auto' and
 bare legacy ids raise `ValueError` before any I/O.
 
+Non-registry layouts (converter models, custom repos) use the generic
+surface — same offline mechanics, same report contract:
+
+```python
+from embroider import cache_info_files
+
+info = cache_info_files("SWHL/RapidOCR",
+                        ["PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",  # bare name = required
+                         ("optional-sidecar.onnx", False)],      # (name, required) pair
+                        cache_dir="/shared/hf-hub")
+info["cached"]   # True when every required file is present
+# info["model_id"] echoes the repo; info["precision"] is None (no tier here)
+```
+
 ## Rust: sessions without Jina
 
 ```rust
@@ -188,7 +202,7 @@ new minor version + re-index-everything notice.
 ## Testing
 
 ```bash
-cargo test --locked                      # 45 pure unit tests (no net/dylib)
+cargo test --locked                      # 49 pure unit tests (no net/dylib)
 # vision e2e (ignored): needs ORT 1.29 dylib + weight files + CUDA ideally
 ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
   VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \

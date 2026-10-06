@@ -38,6 +38,13 @@ Rules:
   fp32). Consumers use it instead of `huggingface_hub`-based checks,
   which crash without the dependency and resolve the wrong repo for
   fp16/multi-file layouts.
+- **Generic cache inspection (0.3.3)**: `embroider.cache_info_files(repo,
+  files, revision, cache_dir)` answers the same question for arbitrary
+  (repo, files) pairs — `files` as `(name, required)` pairs, `cached`
+  true when all required files are present. `cache_info` delegates to it
+  (one lookup implementation); `CacheReport.precision` is now
+  `Option<Precision>` (`None` for the generic surface — no consumer
+  impact, dict keys unchanged).
 
 ## Model licences
 

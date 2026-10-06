@@ -201,8 +201,10 @@ pub struct CacheReport {
     /// Artifact repo actually used — may differ from `model_id` (the
     /// default id at fp16 resolves to the FP16 mirror).
     pub repo: String,
-    /// Resolved precision tier (fp32/fp16/int8; `auto` is refused).
-    pub precision: Precision,
+    /// Resolved precision tier for registry lookups (`cache_info` sets
+    /// `Some`; `auto` is refused). `None` for the generic
+    /// [`cache_info_files`] lookup, which has no precision tier.
+    pub precision: Option<Precision>,
     /// Effective hub cache directory (override or env-resolved default).
     pub cache_dir: PathBuf,
     /// One entry per probed file — the artifact model file, its external-
@@ -221,13 +223,102 @@ pub struct CacheReport {
     pub disk_usage_bytes: u64,
 }
 
+/// Offline cache inspection for an arbitrary (repo, files) pair.
+///
+/// The generic core underneath [`cache_info`]: looks each named file up
+/// in the hub cache — offline only, by construction (every lookup runs
+/// with `local_files_only`, so it can never touch the network, never
+/// build a session, never probe the device). `files` pairs each
+/// repo-relative filename with whether it is required: every entry
+/// appears in `report.files`, and `cached` is true when all *required*
+/// files are present. `repo` must be `owner/name` and at least one file
+/// is required — both are validated before any I/O (an empty lookup
+/// would report `cached` vacuously true).
+///
+/// This is the surface non-registry layouts use (bobine's converter
+/// models): same offline mechanics, same [`CacheReport`] contract —
+/// `model_id` echoes `repo`, and `precision` is `None` (no tier here).
+/// Any failure reads as "absent": this report is diagnostic, and
+/// `open()` re-fails loudly where it matters.
+pub fn cache_info_files(
+    repo: &str,
+    files: &[(&str, bool)],
+    revision: Option<&str>,
+    cache_dir: Option<PathBuf>,
+) -> Result<CacheReport> {
+    if files.is_empty() {
+        return Err(anyhow!(
+            "cache_info_files needs at least one file to look up; pass \
+             [(filename, required)] pairs"
+        ));
+    }
+    let (owner, name) = parse_owner_name(repo)?;
+    let repo_handle = hf_client(cache_dir.clone())?.model(owner, name);
+    let rev = revision.map(str::to_string);
+    // The crate joins the repo-relative filename (may contain '/') onto the
+    // snapshot dir; re-walking the components re-separates them natively
+    // (Windows: `...\onnx/model.onnx` → `...\onnx\model.onnx`) without
+    // resolving symlinks — canonicalize would land on the blob, not the
+    // snapshot pointer.
+    fn cleaned(p: &Path) -> PathBuf {
+        p.components().collect::<PathBuf>()
+    }
+    // The crate's own offline resolution (refs → snapshots/<sha>/<file>,
+    // `.no_exist` aware). Any failure reads as "absent".
+    let lookup = |filename: &str| {
+        repo_handle
+            .download_file()
+            .filename(filename.to_string())
+            .maybe_revision(rev.clone())
+            .local_files_only(true)
+            .send()
+            .ok()
+            .map(|p| cleaned(&p))
+    };
+    let mut file_map: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
+    let mut cached = true;
+    for (filename, required) in files {
+        let path = lookup(filename);
+        if *required && path.is_none() {
+            cached = false;
+        }
+        file_map.insert(filename.to_string(), path);
+    }
+    let present: Vec<&PathBuf> = file_map.values().flatten().collect();
+    // The <sha> dir a found file lives in: first ancestor whose parent is
+    // the snapshots/ folder. None when nothing (or no snapshot-rooted
+    // file) was found.
+    let snapshot_path = present
+        .iter()
+        .find_map(|p| {
+            p.ancestors()
+                .find(|a| a.parent().is_some_and(|par| par.file_name().is_some_and(|n| n == "snapshots")))
+        })
+        .map(|p| p.to_path_buf());
+    let disk_usage_bytes = present
+        .iter()
+        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
+
+    Ok(CacheReport {
+        model_id: repo.to_string(),
+        repo: repo.to_string(),
+        precision: None,
+        cache_dir: cache_dir.unwrap_or_else(hf_hub::resolve_cache_dir),
+        files: file_map,
+        cached,
+        snapshot_path,
+        disk_usage_bytes,
+    })
+}
+
 /// Offline cache inspection for one (model, precision) artifact.
 ///
 /// Resolves the artifact exactly like `JinaV5::open` / `JinaV5Vision::open`
-/// (`lookup_model` → `artifact_for`), then looks each required file up in
-/// the hub cache — offline only, by construction: the lookup runs with
-/// `local_files_only`, so it can never touch the network, never build a
-/// session, never probe the device.
+/// (`lookup_model` → `artifact_for`), then delegates the lookup to the
+/// generic [`cache_info_files`] core (model file + `tokenizer.json`
+/// required, sidecar optional — matching `open()`'s warn-and-continue).
+/// The report carries the id as passed plus its resolved tier.
 ///
 /// `precision` must be explicit: `auto` needs the landed device, and a
 /// guessed tier would report the wrong repo (fp32 official vs fp16
@@ -250,70 +341,19 @@ pub fn cache_info(
         parse_owner_name(artifact.repo)?;
     }
 
-    let (owner, name) = parse_owner_name(artifact.repo)?;
-    let repo = hf_client(cache_dir.clone())?.model(owner, name);
-    let rev = revision.map(str::to_string);
-    // The crate joins the repo-relative filename (may contain '/') onto the
-    // snapshot dir; re-walking the components re-separates them natively
-    // (Windows: `...\onnx/model.onnx` → `...\onnx\model.onnx`) without
-    // resolving symlinks — canonicalize would land on the blob, not the
-    // snapshot pointer.
-    fn cleaned(p: &Path) -> PathBuf {
-        p.components().collect::<PathBuf>()
+    let sidecar = artifact.sidecar();
+    let mut files: Vec<(&str, bool)> = Vec::with_capacity(3);
+    files.push((artifact.file, true));
+    if let Some(sc) = sidecar.as_deref() {
+        files.push((sc, false));
     }
-    // The crate's own offline resolution (refs → snapshots/<sha>/<file>,
-    // `.no_exist` aware). Any failure reads as "absent": this report is
-    // diagnostic, and `open()` re-fails loudly where it matters.
-    let lookup = |filename: &str| {
-        repo.download_file()
-            .filename(filename.to_string())
-            .maybe_revision(rev.clone())
-            .local_files_only(true)
-            .send()
-            .ok()
-            .map(|p| cleaned(&p))
-    };
-    let model_path = lookup(artifact.file);
-    let sidecar_name = artifact.sidecar();
-    let sidecar_path = sidecar_name.as_deref().and_then(lookup);
-    let tok_path = lookup("tokenizer.json");
-
-    let found = [model_path.as_ref(), sidecar_path.as_ref(), tok_path.as_ref()];
-    let cached = model_path.is_some() && tok_path.is_some();
-    // The <sha> dir a found file lives in: first ancestor whose parent is
-    // the snapshots/ folder. None when nothing (or no snapshot-rooted
-    // file) was found.
-    let snapshot_path = found
-        .into_iter()
-        .flatten()
-        .find_map(|p| {
-            p.ancestors()
-                .find(|a| a.parent().is_some_and(|par| par.file_name().is_some_and(|n| n == "snapshots")))
-        })
-        .map(Path::to_path_buf);
-    let disk_usage_bytes = found
-        .into_iter()
-        .flatten()
-        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-        .sum();
-
-    let mut files = BTreeMap::new();
-    files.insert(artifact.file.to_string(), model_path);
-    if let Some(sidecar) = sidecar_name {
-        files.insert(sidecar, sidecar_path);
-    }
-    files.insert("tokenizer.json".to_string(), tok_path);
-
-    Ok(CacheReport {
-        model_id: model_id.to_string(),
-        repo: artifact.repo.to_string(),
-        precision,
-        cache_dir: cache_dir.unwrap_or_else(hf_hub::resolve_cache_dir),
-        files,
-        cached,
-        snapshot_path,
-        disk_usage_bytes,
-    })
+    files.push(("tokenizer.json", true));
+    let mut rep = cache_info_files(artifact.repo, &files, revision, cache_dir)?;
+    // The generic core echoes the repo; the registry surface reports the
+    // id as passed plus its resolved tier.
+    rep.model_id = model_id.to_string();
+    rep.precision = Some(precision);
+    Ok(rep)
 }
 
 /// Fetch only `tokenizer.json` — the cheap acquisition path that lets token
@@ -445,7 +485,7 @@ mod tests {
         let rep = cache_info(FP32_TEXT_MODEL, None, Some(empty.clone()), Precision::Fp16)
             .expect("offline resolution must not fail");
         assert_eq!(rep.repo, FP16_TEXT_MODEL);
-        assert_eq!(rep.precision, Precision::Fp16);
+        assert_eq!(rep.precision, Some(Precision::Fp16));
         assert_eq!(rep.cache_dir, empty);
         assert!(!rep.cached);
         assert_eq!(rep.files.get("onnx/model.onnx"), Some(&None));
@@ -549,6 +589,159 @@ mod tests {
             Some(v) => std::env::set_var(ENDPOINT, v),
             None => std::env::remove_var(ENDPOINT),
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- cache_info_files: the generic (repo, files) surface -------------
+
+    /// Seed a fake hub-cache repo: refs/main + snapshots/<sha>/<files>.
+    fn seed_fake_repo(root: &std::path::Path, folder: &str, blobs: &[(&str, &[u8])]) -> PathBuf {
+        let sha = "abcdef0123456789abcdef0123456789abcdef01";
+        let repo_dir = root.join(folder);
+        std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
+        std::fs::write(repo_dir.join("refs").join("main"), format!("{sha}\n")).unwrap();
+        let snap = repo_dir.join("snapshots").join(sha);
+        for (name, data) in blobs {
+            let p = snap.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, data).unwrap();
+        }
+        snap
+    }
+
+    #[test]
+    fn cache_info_files_hit_partial_and_full_miss() {
+        const ENDPOINT: &str = "HF_ENDPOINT";
+        let saved = std::env::var(ENDPOINT).ok();
+        std::env::set_var(ENDPOINT, "http://127.0.0.1:1");
+
+        let root =
+            std::env::temp_dir().join(format!("embroider-cache-files-fake-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let det = vec![0u8; 256];
+        let rec = vec![0u8; 128];
+        let snap = seed_fake_repo(
+            &root,
+            "models--org--converter",
+            &[("det.onnx", &det), ("nested/rec.onnx", &rec)],
+        );
+
+        // ---- hit: required present, optional missing → still cached ----
+        let rep = cache_info_files(
+            "org/converter",
+            &[("det.onnx", true), ("nested/rec.onnx", true), ("extra.onnx", false)],
+            None,
+            Some(root.clone()),
+        )
+        .unwrap();
+        assert_eq!(rep.model_id, "org/converter");
+        assert_eq!(rep.repo, "org/converter");
+        assert_eq!(rep.precision, None); // generic lookup has no tier
+        assert!(rep.cached, "{rep:?}");
+        assert!(rep.files.get("det.onnx").unwrap().is_some());
+        assert_eq!(rep.files.get("extra.onnx"), Some(&None));
+        assert_eq!(rep.snapshot_path.as_deref(), Some(snap.as_path()));
+        assert_eq!(rep.disk_usage_bytes, (det.len() + rec.len()) as u64);
+
+        // ---- partial: a required file gone → not cached, snapshot kept ----
+        std::fs::remove_file(snap.join("nested/rec.onnx")).unwrap();
+        let rep = cache_info_files(
+            "org/converter",
+            &[("det.onnx", true), ("nested/rec.onnx", true)],
+            None,
+            Some(root.clone()),
+        )
+        .unwrap();
+        assert!(!rep.cached);
+        assert!(rep.files.get("det.onnx").unwrap().is_some());
+        assert_eq!(rep.snapshot_path.as_deref(), Some(snap.as_path()));
+        assert_eq!(rep.disk_usage_bytes, det.len() as u64);
+
+        // ---- full miss: fresh dir raises nothing, everything None ----
+        let fresh = root.join("fresh");
+        std::fs::create_dir_all(&fresh).unwrap();
+        let rep = cache_info_files(
+            "org/converter",
+            &[("det.onnx", true)],
+            None,
+            Some(fresh),
+        )
+        .unwrap();
+        assert!(!rep.cached);
+        assert!(rep.files.values().all(|p| p.is_none()));
+        assert!(rep.snapshot_path.is_none());
+        assert_eq!(rep.disk_usage_bytes, 0);
+
+        match saved {
+            Some(v) => std::env::set_var(ENDPOINT, v),
+            None => std::env::remove_var(ENDPOINT),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cache_info_files_pinned_revision() {
+        let root =
+            std::env::temp_dir().join(format!("embroider-cache-files-pin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sha = "abcdef0123456789abcdef0123456789abcdef01";
+        seed_fake_repo(&root, "models--org--pinned", &[("w.onnx", &[1u8; 16])]);
+        // Commit hash resolves without consulting refs/.
+        let rep = cache_info_files("org/pinned", &[("w.onnx", true)], Some(sha), Some(root.clone()))
+            .unwrap();
+        assert!(rep.cached);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cache_info_files_rejects_empty_and_bad_repo_before_io() {
+        let err = cache_info_files("org/converter", &[], None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("at least one file"), "{err}");
+
+        let err = cache_info_files("no-slash", &[("w.onnx", true)], None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("model_id must be 'owner/name'"), "{err}");
+    }
+
+    #[test]
+    fn cache_info_delegates_to_the_generic_core() {
+        // Structural pin: the registry surface must stay exactly the
+        // generic core plus id/tier patching — filenames, cached-ness,
+        // snapshot and usage cannot drift apart.
+        let root =
+            std::env::temp_dir().join(format!("embroider-cache-deleg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let snap = seed_fake_repo(
+            &root,
+            "models--jinaai--jina-embeddings-v5-text-nano-retrieval",
+            &[("onnx/model.onnx", &[9u8; 64]), ("tokenizer.json", &[7u8; 8])],
+        );
+        let via_registry =
+            cache_info(NANO_TEXT_MODEL, None, Some(root.clone()), Precision::Fp32).unwrap();
+        let via_generic = cache_info_files(
+            NANO_TEXT_MODEL,
+            &[
+                ("onnx/model.onnx", true),
+                ("onnx/model.onnx_data", false),
+                ("tokenizer.json", true),
+            ],
+            None,
+            Some(root.clone()),
+        )
+        .unwrap();
+        assert_eq!(via_registry.files, via_generic.files);
+        assert_eq!(via_registry.cached, via_generic.cached);
+        assert_eq!(via_registry.snapshot_path, via_generic.snapshot_path);
+        assert_eq!(via_registry.disk_usage_bytes, via_generic.disk_usage_bytes);
+        // ...plus the registry-only patching:
+        assert_eq!(via_registry.model_id, NANO_TEXT_MODEL);
+        assert_eq!(via_registry.precision, Some(Precision::Fp32));
+        assert_eq!(via_generic.model_id, NANO_TEXT_MODEL); // repo echoed
+        assert_eq!(via_generic.precision, None);
+        assert_eq!(via_registry.snapshot_path.as_deref(), Some(snap.as_path()));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

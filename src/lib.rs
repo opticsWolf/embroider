@@ -32,8 +32,8 @@ pub mod probe;
 pub mod providers;
 
 pub use acquire::{
-    artifact_for, builtin_models, cache_info, fetch_tokenizer_file, lookup_model,
-    parse_owner_name, repo_for_precision, Artifact, CacheReport, ModelSpec,
+    artifact_for, builtin_models, cache_info, cache_info_files, fetch_tokenizer_file,
+    lookup_model, parse_owner_name, repo_for_precision, Artifact, CacheReport, ModelSpec,
     FP16_TEXT_MODEL, FP32_TEXT_MODEL, NANO_TEXT_MODEL, TEXT_NANO, TEXT_SMALL,
 };
 pub use diag::{report, OrtReport};
@@ -351,6 +351,34 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
         .collect()
 }
 
+/// Shared dict rendering for [`acquire::CacheReport`]: identical keys for
+/// `cache_info` and `cache_info_files` (`model_id, repo, precision,
+/// cache_dir, files, cached, snapshot_path, disk_usage_bytes`);
+/// `precision` is None for the generic lookup, which has no tier.
+#[cfg(feature = "extension-module")]
+fn report_to_dict<'py>(
+    py: Python<'py>,
+    rep: &acquire::CacheReport,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let out = pyo3::types::PyDict::new(py);
+    out.set_item("model_id", &rep.model_id)?;
+    out.set_item("repo", &rep.repo)?;
+    out.set_item("precision", rep.precision.map(|p| p.as_str()))?;
+    out.set_item("cache_dir", rep.cache_dir.display().to_string())?;
+    let files = pyo3::types::PyDict::new(py);
+    for (name, path) in &rep.files {
+        files.set_item(name, path.as_ref().map(|p| p.display().to_string()))?;
+    }
+    out.set_item("files", files)?;
+    out.set_item("cached", rep.cached)?;
+    out.set_item(
+        "snapshot_path",
+        rep.snapshot_path.as_ref().map(|p| p.display().to_string()),
+    )?;
+    out.set_item("disk_usage_bytes", rep.disk_usage_bytes)?;
+    Ok(out)
+}
+
 /// Offline cache inspection (see [`acquire::cache_info`]): answers "is
 /// this model already cached, and where?" without a session, a download,
 /// or a device probe. `precision=None` reads fp32 (side-effect free by
@@ -393,23 +421,59 @@ fn cache_info_py<'py>(
     )
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
 
-    let out = pyo3::types::PyDict::new(py);
-    out.set_item("model_id", rep.model_id)?;
-    out.set_item("repo", rep.repo)?;
-    out.set_item("precision", rep.precision.as_str())?;
-    out.set_item("cache_dir", rep.cache_dir.display().to_string())?;
-    let files = pyo3::types::PyDict::new(py);
-    for (name, path) in &rep.files {
-        files.set_item(name, path.as_ref().map(|p| p.display().to_string()))?;
+    report_to_dict(py, &rep)
+}
+
+/// Offline cache inspection for an arbitrary (repo, files) pair (see
+/// [`acquire::cache_info_files`]): same mechanics and report contract as
+/// `cache_info`, for non-registry layouts (bobine's converter models).
+/// `files` takes bare names (required) or `(name, required)` pairs; a bad
+/// repo, an empty list, or a malformed entry raises ValueError before I/O.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "cache_info_files")]
+#[pyo3(signature = (repo, files, revision=None, cache_dir=None))]
+fn cache_info_files_py<'py>(
+    py: Python<'py>,
+    repo: &str,
+    files: Bound<'py, pyo3::types::PyAny>,
+    revision: Option<String>,
+    cache_dir: Option<String>,
+) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+    let mut parsed: Vec<(String, bool)> = Vec::new();
+    for item in files.try_iter().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(
+            "files must be a list of filenames or (filename, required) pairs",
+        )
+    })? {
+        let item = item?;
+        if let Ok(name) = item.extract::<String>() {
+            parsed.push((name, true));
+        } else if let Ok((name, required)) = item.extract::<(String, bool)>() {
+            parsed.push((name, required));
+        } else {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "files entries must be a filename or a (filename, required) pair",
+            ));
+        }
     }
-    out.set_item("files", files)?;
-    out.set_item("cached", rep.cached)?;
-    out.set_item(
-        "snapshot_path",
-        rep.snapshot_path.map(|p| p.display().to_string()),
-    )?;
-    out.set_item("disk_usage_bytes", rep.disk_usage_bytes)?;
-    Ok(out)
+    if parsed.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "files must not be empty",
+        ));
+    }
+    // The repo is the id here: validate before any I/O, like cache_info.
+    parse_owner_name(repo)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let refs: Vec<(&str, bool)> = parsed.iter().map(|(n, r)| (n.as_str(), *r)).collect();
+    let rep = acquire::cache_info_files(
+        repo,
+        &refs,
+        revision.as_deref(),
+        cache_dir.map(PathBuf::from),
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+
+    report_to_dict(py, &rep)
 }
 
 #[cfg(feature = "extension-module")]
@@ -420,6 +484,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(cache_info_files_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
     m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;

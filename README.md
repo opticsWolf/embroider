@@ -94,7 +94,7 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 | `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application (`apply_providers` = arena on; `apply_providers_with_arena` carries the flag) |
 | `probe` | corrected CUDA availability check (`OnceLock`-cached) |
 | `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`) + explicit `SessionPolicy` (`text_embed()` vs `ort_defaults()`) |
-| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`) |
+| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`) |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
 | `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
 | `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
@@ -238,6 +238,13 @@ legacy ids (`no-slash`) raise `ValueError` before any I/O. Rust
 consumers get the same inspection as `embroider::cache_info` →
 `CacheReport`.
 
+The generic `embroider.cache_info_files(repo, files, revision=None,
+cache_dir=None)` covers non-registry layouts (converter models, custom
+repos): `files` takes bare names (required) or `(name, required)`
+pairs, `cached` is true when every required file is present, `model_id`
+echoes the repo, and `precision` is `None`. Same offline contract, same
+dict keys — the surface bobine's `model_status()` builds on.
+
 ### Explicit local files (air-gapped)
 
 `JinaV5.open_files(onnx_path, tokenizer_path, truncate_dim=512,
@@ -340,14 +347,15 @@ backs the ignored end-to-end parity test.
 
 ## Testing
 
-- **Rust unit tests** (45, pure — no network, no dylib, no tokenizer
+- **Rust unit tests** (49, pure — no network, no dylib, no tokenizer
   file): device/precision parsing, precision-follows-device resolution,
   FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,
   contract constants, `open()`/`open_files()` validation (dims,
   `max_length`) firing before I/O, offline cache inspection
   (`cache_info`: registry artifact resolution, fake-cache hit/partial/
-  full miss, `auto`/bad-id refusal), the vision registry entry, the
+  full miss, `auto`/bad-id refusal; generic `cache_info_files`:
+  required/optional semantics, pinned revision, delegation parity), the vision registry entry, the
   vision resize contract (incl. banker's rounding and aspect rejection),
   host tensors bit-identical to `fixtures/vision/` on all 31 grids, the
   pixel pipeline bit-identical on 3 cases, and the vision fp16-on-CPU

@@ -68,3 +68,70 @@ def test_cache_info_fake_cache_hit(tmp_path):
     assert info["files"]["onnx/model.onnx_data"] is None  # missing sidecar is OK
     assert info["snapshot_path"] == str(snap)
     assert info["disk_usage_bytes"] == 128 + 32
+
+
+# ---- cache_info_files: the generic (repo, files) surface ----
+
+REPO = "org/converter"
+SHA = "abcdef0123456789abcdef0123456789abcdef01"
+
+
+def _seed_repo(root, blobs):
+    repo_dir = root / "models--org--converter"
+    (repo_dir / "refs").mkdir(parents=True)
+    (repo_dir / "refs" / "main").write_text(SHA)
+    snap = repo_dir / "snapshots" / SHA
+    for name, data in blobs.items():
+        p = snap / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+    return snap
+
+
+def test_cache_info_files_empty_cache(tmp_path):
+    info = embroider.cache_info_files(REPO, ["det.onnx", "rec.onnx"], cache_dir=str(tmp_path))
+    assert info["model_id"] == REPO  # the repo is the id here
+    assert info["repo"] == REPO
+    assert info["precision"] is None  # generic lookup has no tier
+    assert info["cache_dir"] == str(tmp_path)
+    assert info["cached"] is False
+    assert set(info["files"]) == {"det.onnx", "rec.onnx"}
+    assert all(p is None for p in info["files"].values())
+    assert info["snapshot_path"] is None
+    assert info["disk_usage_bytes"] == 0
+
+
+def test_cache_info_files_required_optional(tmp_path):
+    snap = _seed_repo(tmp_path, {"det.onnx": b"d" * 256, "nested/rec.onnx": b"r" * 128})
+
+    # Missing optional file keeps cached true (bobine's sidecar-tolerant case).
+    info = embroider.cache_info_files(
+        REPO,
+        ["det.onnx", ("nested/rec.onnx", True), ("extra.onnx", False)],
+        cache_dir=str(tmp_path),
+    )
+    assert info["cached"] is True
+    assert info["files"]["det.onnx"] == str(snap / "det.onnx")
+    assert info["files"]["nested/rec.onnx"] == str(snap / "nested" / "rec.onnx")
+    assert info["files"]["extra.onnx"] is None
+    assert info["snapshot_path"] == str(snap)
+    assert info["disk_usage_bytes"] == 256 + 128
+
+    # Missing required file flips cached, paths of the rest survive.
+    info = embroider.cache_info_files(
+        REPO, ["det.onnx", ("gone.onnx", True)], cache_dir=str(tmp_path)
+    )
+    assert info["cached"] is False
+    assert info["files"]["det.onnx"] is not None
+    assert info["files"]["gone.onnx"] is None
+
+
+def test_cache_info_files_validation_before_io():
+    with pytest.raises(ValueError, match="owner/name"):
+        embroider.cache_info_files("no-slash", ["w.onnx"])
+    with pytest.raises(ValueError, match="must not be empty"):
+        embroider.cache_info_files(REPO, [])
+    with pytest.raises(ValueError, match="must be a filename"):
+        embroider.cache_info_files(REPO, [123])
+    with pytest.raises(TypeError, match="must be a list"):
+        embroider.cache_info_files(REPO, 123)
