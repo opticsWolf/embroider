@@ -60,6 +60,15 @@ pub struct TaskSpec {
 
 ## 2. Track A — rerank (`src/rerank.rs`)
 
+> **Status 2026-10-28: A0 + A1 landed (0.4.0).** Both spikes verified on
+> the ORT 1.29 pin: opset 14, `logits [B,1]` outputs, standard ops only
+> (MiniLM 785 nodes / 3-input incl. type_ids, WordPiece; mMARCO 1532 nodes /
+> 2-input, Unigram). Torch↔ONNX max|Δ| 2.86e-6 (L-6) / 7.63e-06 (mMARCO)
+> at pinned revisions; ORT 1.29.0 CPU ~2 ms/pair (L-6) / ~4–5 ms/pair
+> (mMARCO). Goldens + `tests/rerank_e2e.rs` green on the 1.29 dylib.
+> Remaining: production bakeoff (v2-m3 export vs Qwen3-seq-cls vs
+> jina-v2-multilingual) on okfgraph's language mix.
+
 ### A0. Artifact verification (per candidate, before any Rust)
 
 Twin-spike: two small models proving the seam across arch *and*

@@ -41,6 +41,15 @@ pub struct SessionPolicy {
 }
 
 impl SessionPolicy {
+    /// Measured policy for rerank (pair-scoring) sessions. Starts from the
+    /// text-embedding tuning (Level3, intra = physical-cores/2, inter = 1);
+    /// re-measure on short-pair workloads before retuning — the named
+    /// constructor exists so rerank tuning can diverge without touching
+    /// embedding sessions.
+    pub fn rerank_pair() -> Self {
+        Self::text_embed()
+    }
+
     /// Measured policy for text-embedding sessions: Level3, intra =
     /// physical-cores/2, inter = 1 (fastest of the tested configs; do not
     /// mix tuning levels inside one vector index — see the README table).

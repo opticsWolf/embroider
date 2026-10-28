@@ -184,10 +184,10 @@ impl TokenizerHandle {
 /// device-bound half of `JinaV5::open`, shared by the HF and explicit-path
 /// constructors so both validate the same export contract.
 pub(crate) struct LoadedSession {
-    session: Session,
-    used_cuda: bool,
-    feed_token_type_ids: bool,
-    output_name: String,
+    pub(crate) session: Session,
+    pub(crate) used_cuda: bool,
+    pub(crate) feed_token_type_ids: bool,
+    pub(crate) output_name: String,
 }
 
 /// Build + contract-check a session from an ONNX file already on disk.
@@ -222,8 +222,14 @@ pub(crate) fn build_session(
         }
     }
     let feed_token_type_ids = has_input("token_type_ids");
+    // Output preference: embeddings read last_hidden_state, cross-encoder
+    // rerankers read logits; anything else takes the first output. The
+    // preference order is load-bearing only insofar as each contract's
+    // graph declares exactly one of the named outputs.
     let output_name = if session.outputs().iter().any(|o| o.name() == "last_hidden_state") {
         "last_hidden_state".to_string()
+    } else if session.outputs().iter().any(|o| o.name() == "logits") {
+        "logits".to_string()
     } else {
         session
             .outputs()

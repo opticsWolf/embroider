@@ -10,7 +10,7 @@ pip install embroider
 ```
 
 ```rust
-embroider = "0.3"   // shared ORT plumbing; Jina engine included
+embroider = "0.4"   // shared ORT plumbing; Jina + rerank engines included
 ```
 
 Needs exactly one ONNX Runtime: `onnxruntime==1.29.0` (or
@@ -103,6 +103,26 @@ Fail-fast surfaces: wrong resolution (`vision_target_size` mismatch),
 wrong tokenizer (`seq == image_tokens + 15` re-checked every encode),
 non-nano text partner — all raise, never embed.
 
+## Rerank (Python)
+
+```python
+from embroider import Reranker
+
+r = Reranker.open("cross-encoder/ms-marco-MiniLM-L-6-v2")
+r.score("What is the capital of France?", "Paris is the capital of France.")  # logit, higher = more relevant
+r.score_batch([(q, d1), (q, d2)])   # one padded session run per call, order-preserving
+
+# multilingual twin (mMARCO, XLM-R — token_type_ids not fed, discovered from the graph)
+r = Reranker.open("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
+
+# air-gapped: local files only, zero network
+r = Reranker.open_files("model.onnx", "tokenizer.json")
+```
+
+Pair cap: `max_length` (default 512, the model ceiling); truncation is
+truncate-doc-side-first — the query is never cut to fit the document, and
+a query that alone exceeds the cap raises instead of scoring garbage.
+
 ## Tokenizer-only counts (Python)
 
 ```python
@@ -127,7 +147,7 @@ info["files"]   # per-file paths: model, sidecar (if any), tokenizer.json
 ```
 
 Resolves the artifact exactly like `open()` (`lookup_model` →
-`artifact_for`): the default id at fp16 reports the mirror repo,
+`artifact_for`; task ids via `lookup_task` → `artifact_for_task`): the default id at fp16 reports the mirror repo,
 multi-file repos list their `.onnx_data` sidecar. `cached=True` means an
 offline `open()` would succeed — model file + `tokenizer.json` present;
 a missing sidecar only warns at open and keeps `cached` true.

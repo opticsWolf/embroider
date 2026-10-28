@@ -27,6 +27,7 @@ pub mod diag;
 pub mod error;
 pub mod jina;
 pub mod policy;
+pub mod rerank;
 pub mod vision;
 pub mod probe;
 pub mod providers;
@@ -40,6 +41,9 @@ pub use acquire::{
 };
 pub use diag::{report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
+pub use rerank::{
+    Reranker, RERANK_ABSOLUTE_MAX, RERANK_DEFAULT_MAX,
+};
 pub use vision::{
     vision_target_size, JinaV5Vision, VISION_MAX_PIXELS, VISION_MIN_PIXELS,
 };
@@ -215,6 +219,106 @@ impl PyJinaTokenizer {
         self.inner
             .count_tokens(text)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+    }
+}
+
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "Reranker")]
+struct PyReranker {
+    inner: Reranker,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyReranker {
+    #[staticmethod]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, device="auto", max_length=None, precision=None, cpu_arena=false))]
+    fn open(
+        model_id: &str,
+        revision: Option<String>,
+        cache_dir: Option<String>,
+        device: &str,
+        max_length: Option<usize>,
+        precision: Option<&str>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
+        let inner = Reranker::open(
+            model_id,
+            revision.as_deref(),
+            cache_dir.map(PathBuf::from),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            precision,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (onnx_path, tokenizer_path, device="auto", max_length=None, cpu_arena=false))]
+    fn open_files(
+        onnx_path: &str,
+        tokenizer_path: &str,
+        device: &str,
+        max_length: Option<usize>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let inner = Reranker::open_files(
+            std::path::Path::new(onnx_path),
+            std::path::Path::new(tokenizer_path),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    fn score(&self, py: Python<'_>, query: &str, doc: &str) -> PyResult<f32> {
+        py.detach(|| {
+            self.inner
+                .score_one(query, doc)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+        })
+    }
+
+    #[pyo3(signature = (pairs))]
+    fn score_batch(&self, py: Python<'_>, pairs: Vec<(String, String)>) -> PyResult<Vec<f32>> {
+        let refs: Vec<(&str, &str)> =
+            pairs.iter().map(|(q, d)| (q.as_str(), d.as_str())).collect();
+        py.detach(|| {
+            self.inner
+                .score_many(&refs)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+        })
+    }
+
+    #[getter]
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    #[getter]
+    fn used_cuda(&self) -> bool {
+        self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn max_length(&self) -> usize {
+        self.inner.max_len()
+    }
+
+    #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
     }
 }
 
@@ -505,6 +609,7 @@ fn cache_info_files_py<'py>(
 fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaV5>()?;
     m.add_class::<PyJinaTokenizer>()?;
+    m.add_class::<PyReranker>()?;
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;

@@ -38,6 +38,13 @@ Rules:
   fp32). Consumers use it instead of `huggingface_hub`-based checks,
   which crash without the dependency and resolve the wrong repo for
   fp16/multi-file layouts.
+- **Reranker contract (0.4.0)**: `Reranker::open` / `open_files` /
+  `score_one` / `score_many` (`src/rerank.rs`, Python `embroider.Reranker`).
+  Pair encoding `[query, doc]` with truncate-doc-side-first (`OnlySecond`)
+  and per-batch longest padding; `token_type_ids` fed only when the graph
+  declares them (MiniLM 3-input vs mMARCO 2-input, discovered at load).
+  Goldens `fixtures/golden_rerank_{minilm,mmarco}.json` (ORT 1.29.0 CPU,
+  abs 1e-6) + ignored `tests/rerank_e2e.rs`, same gates as vision.
 - **Task registry (0.3.4)**: `acquire::{TaskSpec, TaskKind, builtin_tasks,
   lookup_task, artifact_for_task}` — the non-embedding sibling of
   `ModelSpec` (no `native_dim`/`ladder`; scores and decisions have no
@@ -65,8 +72,8 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `jina-embeddings-v5-text-small-retrieval` fp16 | `opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16` | CC BY-NC 4.0 (ONNX conversion of the above) |
 | `jina-embeddings-v5-text-nano-retrieval` fp32 / fp16 / int8 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | CC BY-NC 4.0 |
 | `jina-v5-omni-nano-retrieval-vision` fp32 / fp16 | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | CC BY-NC 4.0 (dynamic-grid ONNX export of `jinaai/jina-embeddings-v5-omni-nano-retrieval`; card carries base_model, attribution, changes) |
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank spike, English; upstream repo referenced, never mirrored) |
-| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank spike, multilingual; upstream repo referenced, never mirrored) |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank, English; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 2.9e-6) |
+| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank, multilingual; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 7.7e-6) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence

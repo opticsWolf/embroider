@@ -3,6 +3,24 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.4.0] — 2026-10-28
+
+### Added
+- Cross-encoder rerank contract (`src/rerank.rs`, Python
+  `embroider.Reranker`): `open` / `open_files` / `score_one` /
+  `score_batch`, mirroring the `JinaV5` seams (device→precision ordering,
+  registry ceilings, warn-and-honour fp16-on-CPU). Pair encoding with
+  truncate-doc-side-first and per-batch longest padding; `token_type_ids`
+  fed only when the graph declares it. Session tuning via
+  `SessionPolicy::rerank_pair()` (starts from the text-embedding tuning).
+- Vendored goldens `fixtures/golden_rerank_{minilm,mmarco}.json` (MiniLM-L-6
+  English + mMARCO-L12 multilingual, ORT 1.29.0 CPU, abs 1e-6) with torch
+  parity measured at 2.9e-6 / 7.7e-6; ignored `tests/rerank_e2e.rs` asserts
+  both goldens plus per-language relevant-beats-irrelevant ordering.
+- Shared session builder now prefers the `logits` output when a graph
+  declares it (embeddings still read `last_hidden_state`; no contract
+  impact — each graph declares exactly one of the two).
+
 ## [0.3.4] — 2026-10-28
 
 ### Added

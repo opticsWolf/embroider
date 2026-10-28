@@ -1,0 +1,19 @@
+{
+ "contract": "rerank-cross-encoder",
+ "model": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+ "revision": "1427fd652930e4ba29e8149678df786c240d8825",
+ "provenance": "onnxruntime 1.29.0 CPU; OnlySecond truncation max_length=512, batch-longest padding; torch parity max abs diff 7.63e-06 (sentence-transformers 6.2.0, torch 2.15.0+cpu, same revision)",
+ "max_length": 512,
+ "pairs": {
+  "en_relevant": {"query": "What is the capital of France?", "doc": "Paris is the capital and largest city of France."},
+  "en_irrelevant": {"query": "What is the capital of France?", "doc": "The honey badger ranges across sub-Saharan Africa, feeding opportunistically on insects."},
+  "de_relevant": {"query": "Wo ist die Hauptstadt von Frankreich?", "doc": "Paris ist die Hauptstadt und größte Stadt Frankreichs."},
+  "de_irrelevant": {"query": "Wo ist die Hauptstadt von Frankreich?", "doc": "Der Honigdachs lebt in Afrika und ernährt sich von Insekten."}
+ },
+ "cases": [
+  {"pair": "en_relevant", "score": 4.784177780151367},
+  {"pair": "en_irrelevant", "score": -6.373566627502441},
+  {"pair": "de_relevant", "score": 5.826750755310059},
+  {"pair": "de_irrelevant", "score": -5.663217544555664}
+ ]
+}
