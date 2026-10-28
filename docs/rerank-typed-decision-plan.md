@@ -68,6 +68,22 @@ pub struct TaskSpec {
 > (mMARCO). Goldens + `tests/rerank_e2e.rs` green on the 1.29 dylib.
 > Remaining: production bakeoff (v2-m3 export vs Qwen3-seq-cls vs
 > jina-v2-multilingual) on okfgraph's language mix.
+>
+> **Precision sweep 2026-10-28 (RTX 3090 + Ryzen 9 5950X, ORT 1.29.0).**
+> Latency ms/pair — CPU fp32: L-6 1.3–1.6, mMARCO 2.1–3.2. CUDA fp32:
+> ~1.1 (L-6) / ~2.1 (mMARCO) at batch 2, collapsing to 0.09–0.13 / 0.25–0.28
+> at batch 16–32 (~14x / ~8x vs CPU — GPU pays off at batch, launch-bound
+> below). CUDA↔CPU logit drift ~1e-3 (kernel-order noise; goldens stay
+> CPU-only). CUDA path confirmed working; e2e stays CPU-gated like vision.
+> fp16 (optimum `--dtype fp16` export, keep-io): drift 3.3e-3 (L-6) /
+> 5.3e-3 (mMARCO), order kept — but SLOWER than fp32 on both CPU (~1.5–2x)
+> and CUDA (launch-bound tiny graphs). Not shipped; warn-and-honour stays.
+> int8 (vendor qint8_avx512 / vnni / quint8_avx2, 4x smaller: 23MB / 116MB):
+> ~1.4x / ~1.7x faster CPU, rank intact 6/6 on a 12-pair probe — but drift
+> up to 0.55 (L-6) / 1.10 (mMARCO) logit units, and the probe is too thin
+> for a ship decision (plus int8 needs its own golden set, not the 1e-6
+> one). NOT listed in the registry; gate on the production-bakeoff
+> question set with a wider rank-parity harness.
 
 ### A0. Artifact verification (per candidate, before any Rust)
 
