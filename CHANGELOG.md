@@ -3,6 +3,21 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.3.4] — 2026-10-28
+
+### Added
+- Task registry (`acquire::{TaskSpec, TaskKind, builtin_tasks,
+  lookup_task, artifact_for_task}`): non-embedding sibling of the
+  `ModelSpec` registry for rerankers and typed-decision models (no
+  `native_dim`/`ladder`). `cache_info` resolves task ids through the
+  same offline delegation; `available_models()` gains a `kind` key
+  (`embed`/`rerank`/`decide`) with all existing keys unchanged. No
+  existing contract moves — purely additive, no consumer impact.
+- First task entries: the rerank twin-spike (`cross-encoder` MiniLM-L-6
+  English + mMARCO MiniLMv2-L12 multilingual, Apache-2.0, fp32 tier
+  only until measured). Licence rows in `docs/compat.md` — these are
+  the registry's first commercially-usable weights.
+
 ## [0.3.3] — 2026-10-06
 
 ### Added

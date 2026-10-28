@@ -38,6 +38,14 @@ Rules:
   fp32). Consumers use it instead of `huggingface_hub`-based checks,
   which crash without the dependency and resolve the wrong repo for
   fp16/multi-file layouts.
+- **Task registry (0.3.4)**: `acquire::{TaskSpec, TaskKind, builtin_tasks,
+  lookup_task, artifact_for_task}` — the non-embedding sibling of
+  `ModelSpec` (no `native_dim`/`ladder`; scores and decisions have no
+  vector space). `cache_info` resolves task ids through the same
+  delegation + id/tier patching; `available_models()` gains a `kind`
+  key (`embed`/`rerank`/`decide`, existing keys unchanged). First
+  entries: the Apache-2.0 rerank spikes (MiniLM-L-6 English +
+  mMARCO-L12 multilingual, fp32 tier only until measured).
 - **Generic cache inspection (0.3.3)**: `embroider.cache_info_files(repo,
   files, revision, cache_dir)` answers the same question for arbitrary
   (repo, files) pairs — `files` as `(name, required)` pairs, `cached`
@@ -57,6 +65,8 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `jina-embeddings-v5-text-small-retrieval` fp16 | `opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16` | CC BY-NC 4.0 (ONNX conversion of the above) |
 | `jina-embeddings-v5-text-nano-retrieval` fp32 / fp16 / int8 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | CC BY-NC 4.0 |
 | `jina-v5-omni-nano-retrieval-vision` fp32 / fp16 | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | CC BY-NC 4.0 (dynamic-grid ONNX export of `jinaai/jina-embeddings-v5-omni-nano-retrieval`; card carries base_model, attribution, changes) |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank spike, English; upstream repo referenced, never mirrored) |
+| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank spike, multilingual; upstream repo referenced, never mirrored) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence

@@ -33,6 +33,11 @@ pub const VISION_NANO_REPO: &str =
 /// Canonical vision model id. Short (not `owner/name`): the id names the
 /// contract, the spec's artifacts name where the files live.
 pub const VISION_NANO_MODEL: &str = "jina-v5-omni-nano-retrieval-vision";
+/// Rerank spike ids (plan `docs/rerank-typed-decision-plan.md` §A0): the
+/// English MiniLM-L-6 and its multilingual mMARCO sibling. Owner/name ids
+/// name the contract directly; the spec's artifacts name the file layout.
+pub const RERANK_MINILM_MODEL: &str = "cross-encoder/ms-marco-MiniLM-L-6-v2";
+pub const RERANK_MMARCO_MODEL: &str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1";
 
 /// One downloadable artifact: the repo holding it plus the model file
 /// inside that repo. The external-data sidecar is derived (same stem +
@@ -141,6 +146,92 @@ pub fn builtin_models() -> &'static [ModelSpec] {
 /// itself is the fp32 repo with the default `onnx/model.onnx` layout.
 pub fn lookup_model(model_id: &str) -> Option<ModelSpec> {
     builtin_models().iter().find(|m| m.id == model_id).copied()
+}
+
+/// What a task model does. Embedding specs carry vector-space metadata
+/// (`native_dim`, `ladder`); task specs don't — scores and decisions
+/// have no dimension to truncate, only a positional ceiling.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TaskKind {
+    Rerank,
+    Decide,
+}
+
+impl TaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskKind::Rerank => "rerank",
+            TaskKind::Decide => "decide",
+        }
+    }
+}
+
+/// Static contract for a non-embedding model: rerankers (`Rerank`) and
+/// typed-decision models (`Decide`). Same artifact mechanics as
+/// [`ModelSpec`] (fp32 default, measured precisions only — unlisted
+/// (precision, model) pairs fall back to the fp32 artifact), minus the
+/// vector-space fields task outputs don't have.
+#[derive(Clone, Copy, Debug)]
+pub struct TaskSpec {
+    pub id: &'static str,
+    pub kind: TaskKind,
+    pub max_tokens: usize,
+    pub fp32: Artifact<'static>,
+    pub fp16: Option<Artifact<'static>>,
+    pub int8: Option<Artifact<'static>>,
+}
+
+/// Rerank spike, English (plan §A0): MiniLM-L-6 cross-encoder, 22.7M.
+/// In-repo ONNX (`onnx/model.onnx`) + `tokenizer.json`; only the fp32
+/// tier is listed until a precision is measured (the quant-spike rule).
+pub const RERANK_MINILM: TaskSpec = TaskSpec {
+    id: RERANK_MINILM_MODEL,
+    kind: TaskKind::Rerank,
+    max_tokens: 512,
+    fp32: Artifact { repo: RERANK_MINILM_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp16: None,
+    int8: None,
+};
+
+/// Rerank spike, multilingual (plan §A0): mMARCO MiniLMv2-L12-H384, 118M.
+/// Same `onnx/model.onnx` in-repo layout (not the O1–O4 optimum
+/// variants); XLM-R arch + SentencePiece tokenizer exercise the loader's
+/// second family through the same `open_files` seam.
+pub const RERANK_MMARCO: TaskSpec = TaskSpec {
+    id: RERANK_MMARCO_MODEL,
+    kind: TaskKind::Rerank,
+    max_tokens: 512,
+    fp32: Artifact { repo: RERANK_MMARCO_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp16: None,
+    int8: None,
+};
+
+/// Builtin task registry. Adding entries never moves existing graphs —
+/// different models, different outputs, no shared vector space.
+pub fn builtin_tasks() -> &'static [TaskSpec] {
+    &[RERANK_MINILM, RERANK_MMARCO]
+}
+
+/// Look up a canonical id in the task registry. Unknown ids return
+/// `None` and take the legacy path (same convention as
+/// [`lookup_model`]).
+pub fn lookup_task(model_id: &str) -> Option<TaskSpec> {
+    builtin_tasks().iter().find(|m| m.id == model_id).copied()
+}
+
+/// Select the acquisition artifact for a (task model, precision) request.
+/// `Auto` must already be resolved via `Precision::resolve` before
+/// calling (auto never yields `Int8`). Unlisted pairs fall back to the
+/// spec fp32 artifact; unknown ids fall back to the legacy layout.
+pub fn artifact_for_task<'a>(model_id: &'a str, precision: Precision) -> Artifact<'a> {
+    match lookup_task(model_id) {
+        Some(spec) => match precision {
+            Precision::Fp16 => spec.fp16.unwrap_or(spec.fp32),
+            Precision::Int8 => spec.int8.unwrap_or(spec.fp32),
+            _ => spec.fp32,
+        },
+        None => Artifact { repo: model_id, file: "onnx/model.onnx", sidecar: None },
+    }
 }
 
 /// Select the acquisition artifact for a (model, precision) request.
@@ -315,7 +406,8 @@ pub fn cache_info_files(
 /// Offline cache inspection for one (model, precision) artifact.
 ///
 /// Resolves the artifact exactly like `JinaV5::open` / `JinaV5Vision::open`
-/// (`lookup_model` → `artifact_for`), then delegates the lookup to the
+/// (`lookup_model` → `artifact_for`; task ids resolve via `lookup_task`
+/// → `artifact_for_task`), then delegates the lookup to the
 /// generic [`cache_info_files`] core (model file + `tokenizer.json`
 /// required, sidecar optional — matching `open()`'s warn-and-continue).
 /// The report carries the id as passed plus its resolved tier.
@@ -336,8 +428,11 @@ pub fn cache_info(
              pass an explicit precision ('fp32', 'fp16' or 'int8')"
         ));
     }
-    let artifact = artifact_for(model_id, precision);
-    if lookup_model(model_id).is_none() {
+    let artifact = match lookup_task(model_id) {
+        Some(_) => artifact_for_task(model_id, precision),
+        None => artifact_for(model_id, precision),
+    };
+    if lookup_model(model_id).is_none() && lookup_task(model_id).is_none() {
         parse_owner_name(artifact.repo)?;
     }
 
@@ -470,6 +565,48 @@ mod tests {
         assert!(lookup_model("someone/custom-embed").is_none());
         let a = artifact_for("someone/custom-embed", Precision::Fp16);
         assert_eq!((a.repo, a.file), ("someone/custom-embed", "onnx/model.onnx"));
+    }
+
+    #[test]
+    fn task_registry_spike_entries() {
+        let mini = lookup_task(RERANK_MINILM_MODEL).expect("minilm registered");
+        assert_eq!(mini.kind, TaskKind::Rerank);
+        assert_eq!(mini.max_tokens, 512);
+        // Unmeasured tiers stay unlisted (the quant-spike rule).
+        assert!(mini.fp16.is_none() && mini.int8.is_none());
+        let mm = lookup_task(RERANK_MMARCO_MODEL).expect("mmarco registered");
+        assert_eq!(mm.kind, TaskKind::Rerank);
+        assert_eq!(mm.max_tokens, 512);
+        let fp32 = artifact_for_task(RERANK_MINILM_MODEL, Precision::Fp32);
+        assert_eq!((fp32.repo, fp32.file), (RERANK_MINILM_MODEL, "onnx/model.onnx"));
+        // Unlisted pairs fall back to fp32, never to junk.
+        for p in [Precision::Fp16, Precision::Int8, Precision::Auto] {
+            let a = artifact_for_task(RERANK_MMARCO_MODEL, p);
+            assert_eq!((a.repo, a.file), (RERANK_MMARCO_MODEL, "onnx/model.onnx"));
+        }
+        // Unknown ids take the legacy layout.
+        assert!(lookup_task("someone/custom-embed").is_none());
+        let a = artifact_for_task("someone/custom-rerank", Precision::Fp16);
+        assert_eq!((a.repo, a.file), ("someone/custom-rerank", "onnx/model.onnx"));
+        // The registries don't leak into each other.
+        assert!(lookup_model(RERANK_MINILM_MODEL).is_none());
+        assert!(lookup_task(FP32_TEXT_MODEL).is_none());
+        assert_eq!(TaskKind::Rerank.as_str(), "rerank");
+        assert_eq!(TaskKind::Decide.as_str(), "decide");
+    }
+
+    #[test]
+    fn cache_info_resolves_task_ids_offline() {
+        let empty = std::env::temp_dir().join("embroider-cache-info-task-empty");
+        let _ = std::fs::remove_dir_all(&empty);
+        let rep =
+            cache_info(RERANK_MMARCO_MODEL, None, Some(empty), Precision::Fp32).unwrap();
+        assert_eq!(rep.model_id, RERANK_MMARCO_MODEL);
+        assert_eq!(rep.repo, RERANK_MMARCO_MODEL);
+        assert_eq!(rep.precision, Some(Precision::Fp32));
+        assert!(!rep.cached);
+        assert_eq!(rep.files.get("onnx/model.onnx"), Some(&None));
+        assert_eq!(rep.files.get("tokenizer.json"), Some(&None));
     }
 
     // ---- cache_info: offline artifact resolution -----------------------------

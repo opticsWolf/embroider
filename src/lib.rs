@@ -32,9 +32,11 @@ pub mod probe;
 pub mod providers;
 
 pub use acquire::{
-    artifact_for, builtin_models, cache_info, cache_info_files, fetch_tokenizer_file,
-    lookup_model, parse_owner_name, repo_for_precision, Artifact, CacheReport, ModelSpec,
-    FP16_TEXT_MODEL, FP32_TEXT_MODEL, NANO_TEXT_MODEL, TEXT_NANO, TEXT_SMALL,
+    artifact_for, artifact_for_task, builtin_models, builtin_tasks, cache_info, cache_info_files,
+    fetch_tokenizer_file, lookup_model, lookup_task, parse_owner_name, repo_for_precision,
+    Artifact, CacheReport, ModelSpec, TaskKind, TaskSpec, FP16_TEXT_MODEL, FP32_TEXT_MODEL,
+    NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL, RERANK_MINILM, RERANK_MINILM_MODEL,
+    TEXT_NANO, TEXT_SMALL,
 };
 pub use diag::{report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
@@ -318,16 +320,19 @@ fn vision_target_size_py(h: u32, w: u32) -> PyResult<(u32, u32)> {
 }
 
 /// Registry listing for UIs and config validation: one dict per builtin
-/// model (id, native_dim, max_tokens, ladder, precisions with artifacts,
-/// text_partner for vision models).
+/// model (id, kind, native_dim, max_tokens, ladder, precisions with
+/// artifacts, text_partner for vision models). Task entries (rerank,
+/// decide) carry their kind with the vector-space keys empty — same
+/// schema, no per-kind parsing on the caller side.
 #[cfg(feature = "extension-module")]
 #[pyfunction]
 fn available_models() -> Vec<std::collections::HashMap<String, String>> {
-    builtin_models()
+    let mut out: Vec<std::collections::HashMap<String, String>> = builtin_models()
         .iter()
         .map(|m| {
             let mut d = std::collections::HashMap::new();
             d.insert("id".to_string(), m.id.to_string());
+            d.insert("kind".to_string(), "embed".to_string());
             d.insert("native_dim".to_string(), m.native_dim.to_string());
             d.insert("max_tokens".to_string(), m.max_tokens.to_string());
             d.insert(
@@ -348,7 +353,26 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
             );
             d
         })
-        .collect()
+        .collect();
+    out.extend(builtin_tasks().iter().map(|t| {
+        let mut d = std::collections::HashMap::new();
+        d.insert("id".to_string(), t.id.to_string());
+        d.insert("kind".to_string(), t.kind.as_str().to_string());
+        d.insert("native_dim".to_string(), String::new());
+        d.insert("max_tokens".to_string(), t.max_tokens.to_string());
+        d.insert("ladder".to_string(), String::new());
+        let mut prec = vec!["fp32"];
+        if t.fp16.is_some() {
+            prec.push("fp16");
+        }
+        if t.int8.is_some() {
+            prec.push("int8");
+        }
+        d.insert("precisions".to_string(), prec.join(","));
+        d.insert("text_partner".to_string(), String::new());
+        d
+    }));
+    out
 }
 
 /// Shared dict rendering for [`acquire::CacheReport`]: identical keys for
