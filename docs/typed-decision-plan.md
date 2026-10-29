@@ -161,11 +161,12 @@ changes the moment the first one lands — flag, don't bury).
 
 ## 6. Remaining work
 
-1. **B0 execution:** download pinned revisions → G0 → G1 → G2/G3 →
-   G4 → decision. GLiClass-small first (cheapest acquisition, unblocks
-   the `decide.rs` shape even if Laya wins — same seam either way).
-2. **`src/decide.rs` + goldens + e2e + PyO3** → release **0.5.0** (minor:
-   new contract). okfgraph floor-pin coordination as with 0.4.x.
+1. **B0 execution (small-v1.0 done, §8):** Laya + v4-edge bakeoffs
+   queued — same G0–G5 gates. GLiClass-small unblocked the `decide.rs`
+   shape as planned (same seam either way).
+2. **`src/decide.rs` + goldens + e2e + PyO3 — DONE on `dev` (0.5.0).**
+   Release (merge → tag `v0.5.0` → publish) pending go-ahead; okfgraph
+   floor-pin coordination as with 0.4.x.
 3. **okfgraph side** (separate plan when 0.5.0 exists): confidence-gated
    routing (cheap local decide → rerank → LLM/human escalation),
    threshold re-fit harness, regime curves before promotion.

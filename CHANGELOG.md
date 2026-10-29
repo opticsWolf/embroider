@@ -3,6 +3,32 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.0] — 2026-10-29
+
+### Added
+- Typed-decision contract (`src/decide.rs`, Python `embroider.Decider`):
+  `Decider::open` / `open_files` / `decide` / `decide_many`, mirroring
+  the `Reranker` seams (device→precision ordering, registry ceilings,
+  warn-and-honour fp16-on-CPU, `count_tokens` via the shared helper).
+  `Question::Choice` (single-label stable softmax) vs `Question::Score`
+  (multi-label native sigmoid, unthresholded — thresholds stay consumer
+  policy); `Question::Noul` declared but loud-unsupported (no registered
+  model serves none-of-the-above). Input construction is contract:
+  `state + (<<LABEL>>option)* + <<SEP>> + instructions`
+  (`prompt_first=false`), truncate-state-side-first with manual id
+  concat; temperature is identity (the spike model ships no fitted
+  temps). Batched rows with different option counts share one padded
+  run (first-Cᵢ readout — B0-verified row-prefix-exact, tail slots
+  unread). Registry `Decide` entry: `knowledgator/gliclass-small-v1.0`
+  (144M, Apache-2.0, fp32 tier only until measured), `available_models()`
+  kind `decide`. Golden `fixtures/golden_decide_gliclass_small.json`
+  (ORT 1.29.0 CPU, abs 1e-6, exact-match labels, torch exact on 8 B0
+  probes at pinned revision `21edefaf`) + ignored
+  `tests/decide_e2e.rs` (incl. the layout proof and validation order).
+  B0 finding, recorded: single-label 3/3 correct; multi-label raw
+  sigmoids systematically over-confident — not decision-ready without
+  calibration/thresholds (see `docs/typed-decision-plan.md` §8).
+
 ## [0.4.1] — 2026-10-29
 
 ### Added

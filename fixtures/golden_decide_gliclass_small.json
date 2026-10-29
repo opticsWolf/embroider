@@ -1,0 +1,23 @@
+{
+ "contract": "decide-gliclass",
+ "model": "knowledgator/gliclass-small-v1.0",
+ "revision": "21edefaf7951f68c68c505f9139ba536d3b448f7",
+ "provenance": "onnxruntime 1.29.0 CPU; truncate-state-side-first max_length=512 (state + (<<LABEL>>option)* + <<SEP>> + instructions); torch parity exact to 1e-3 on 8 probes (gliclass 0.1.21, torch 2.15.0+cpu, same revision)",
+ "max_length": 512,
+ "token_counts": {
+  "travel_single": 8,
+  "travel_score": 8,
+  "sport_single": 11,
+  "sport_score": 11,
+  "cook_single": 11,
+  "vote_single": 9
+ },
+ "cases": [
+  {"key": "travel_single", "kind": "choice", "state": "One day I will see the world!", "options": ["travel", "dreams", "sport", "science", "politics"], "label": "dreams", "probs": [0.485547, 0.50503, 0.007677, 0.001744, 0.000003]},
+  {"key": "travel_score", "kind": "score", "state": "One day I will see the world!", "options": ["travel", "dreams", "sport", "science", "politics"], "label": "dreams", "probs": [0.999999, 0.999999, 0.999912, 0.999612, 0.817217]},
+  {"key": "sport_single", "kind": "choice", "state": "The football match ended 2-1 after extra time.", "options": ["sports", "cooking", "quantum physics", "knitting"], "label": "sports", "probs": [0.943693, 0.000004, 0.056233, 0.00007]},
+  {"key": "cook_single", "kind": "choice", "state": "Preheat the oven to 200 degrees and fold the dough.", "options": ["sports", "cooking", "quantum physics", "knitting"], "label": "cooking", "probs": [0.0, 0.564311, 0.000713, 0.434975]},
+  {"key": "vote_single", "kind": "choice", "state": "The election results will be announced at midnight.", "options": ["sports", "politics", "cooking", "weather"], "label": "politics", "probs": [0.000001, 0.997649, 0.000126, 0.002224]},
+  {"key": "sport_score", "kind": "score", "state": "The football match ended 2-1 after extra time.", "options": ["sports", "cooking", "quantum physics", "knitting"], "label": "sports", "probs": [0.999999, 0.723468, 0.999975, 0.98018]}
+ ]
+}

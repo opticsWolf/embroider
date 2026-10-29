@@ -72,6 +72,7 @@ Apache-2.0, the registry's first commercially-usable weights:
 |---|---|---|---|
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` | itself (`onnx/model.onnx`) | fp32 | Rerank, English |
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | itself (`onnx/model.onnx`) | fp32 | Rerank, multilingual (100+ langs) |
+| `knowledgator/gliclass-small-v1.0` | itself (`onnx/model.onnx`) | fp32 | Typed decisions (Choice/Score), 144M |
 
 ### Custom models
 
@@ -111,6 +112,7 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 | `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
 | `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
 | `rerank` | `Reranker` — the cross-encoder scoring contract (pair seam + `score_long` windowing) |
+| `decide` | `Decider` — the typed-decision contract (`Choice`/`Score` questions, truncate-state-side-first) |
 
 The default (pure-Rust) build is Python-free — no `pyo3` in downstream
 trees; the `extension-module` Cargo feature gates the PyO3 bindings and is
@@ -252,6 +254,36 @@ irrelevant ordering. Precision notes from the spike: fp16 rejected
 (slower + drift), int8 gated on a wider harness, CUDA opportunistic
 (~1.5x at batch, worse at b1) — see
 docs/[rerank-typed-decision-plan.md](docs/rerank-typed-decision-plan.md).
+
+## Decide
+
+Typed questions over a state: one calibrated distribution per question,
+single forward pass. `Decider.open(model_id, revision=None,
+cache_dir=None, device="auto", max_length=None, precision=None,
+cpu_arena=False)`: `max_length` caps sequences at 1..=512 (`None` = the
+registered ceiling; `.max_len` reports the effective limit). `decide(state,
+questions)` answers a batch in one padded session run, order-preserving;
+`decide_many([(state, question), …])` batches across states.
+
+`Question::Choice` is single-label (stable softmax — exactly one option
+wins); `Question::Score` is multi-label (sigmoid, native and
+unthresholded — the consumer fits thresholds, because the B0 probe showed
+raw multi-label sigmoids systematically over-confident: `quantum physics`
+at 1.0 on a football text). `Question::Noul` is declared but
+loud-unsupported — no registered model serves none-of-the-above, so it
+errors instead of degrading into a threshold nobody fitted.
+
+Input construction is contract, pinned like the rerank pair seam:
+`state + (<<LABEL>>option)* + <<SEP>> + instructions`
+(`prompt_first=false`), truncate-state-side-first with manual id
+concatenation (the pair-tokenizer `OnlySecond` pattern would cut the
+wrong side). Temperature is identity — the model ships no fitted temps.
+Goldens live in `fixtures/golden_decide_gliclass_small.json` (ORT 1.29.0
+CPU, abs 1e-6 on probs, exact-match labels, torch exact on 8 B0 probes)
+with the ignored `tests/decide_e2e.rs` asserting them plus the layout
+proof (Rust-built ids equal a single recipe encode). GLiClass-small is
+the seam-proving spike; Laya (native typed questions) and v4-edge stay
+queued in docs/[typed-decision-plan.md](docs/typed-decision-plan.md).
 
 ## Running without downloads
 

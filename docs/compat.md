@@ -45,6 +45,20 @@ Rules:
   declares them (MiniLM 3-input vs mMARCO 2-input, discovered at load).
   Goldens `fixtures/golden_rerank_{minilm,mmarco}.json` (ORT 1.29.0 CPU,
   abs 1e-6) + ignored `tests/rerank_e2e.rs`, same gates as vision.
+- **Decider contract (0.5.0)**: `Decider::open` / `open_files` /
+  `decide` / `decide_many` (`src/decide.rs`, Python `embroider.Decider`).
+  `Question::{Choice, Score}` over a state (single-label softmax vs
+  multi-label native sigmoid — thresholds stay consumer-side);
+  `Noul` declared but loud-unsupported (no registered model serves it).
+  Input construction is contract:
+  `state + (<<LABEL>>option)* + <<SEP>> + instructions`
+  (`prompt_first=false`), truncate-state-side-first with manual id
+  concat (the pair-tokenizer `OnlySecond` pattern would cut the wrong
+  side); temperature is identity (no fitted temps ship with the model).
+  Golden `fixtures/golden_decide_gliclass_small.json` (ORT 1.29.0 CPU,
+  abs 1e-6 on probs, exact-match labels) + ignored
+  `tests/decide_e2e.rs`, same gates as rerank (incl. the layout proof:
+  Rust-built ids equal a single recipe encode).
 - **Task registry (0.3.4)**: `acquire::{TaskSpec, TaskKind, builtin_tasks,
   lookup_task, artifact_for_task}` — the non-embedding sibling of
   `ModelSpec` (no `native_dim`/`ladder`; scores and decisions have no
@@ -74,6 +88,7 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `jina-v5-omni-nano-retrieval-vision` fp32 / fp16 | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | CC BY-NC 4.0 (dynamic-grid ONNX export of `jinaai/jina-embeddings-v5-omni-nano-retrieval`; card carries base_model, attribution, changes) |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank, English; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 2.9e-6) |
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank, multilingual; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 7.7e-6) |
+| `knowledgator/gliclass-small-v1.0` fp32 | `knowledgator/gliclass-small-v1.0` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch exact on 8 B0 probes) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence

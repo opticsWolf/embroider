@@ -129,6 +129,26 @@ Pair cap: `max_length` (default 512, the model ceiling); truncation is
 truncate-doc-side-first — the query is never cut to fit the document, and
 a query that alone exceeds the cap raises instead of scoring garbage.
 
+## Decide (Python)
+
+```python
+from embroider import Decider
+
+d = Decider.open("knowledgator/gliclass-small-v1.0")
+d.decide("The football match ended 2-1.", [("choice", "", ["sports", "cooking"])])
+# → [("sports", [("sports", 0.94...), ("cooking", 0.0...)])]  — softmax, exactly one wins
+d.decide(state, [("score", "", options)])   # sigmoid per option, native unthresholded
+# d.decide(state, [("noul", "", options)])  → RuntimeError: no registered model serves Noul
+
+d.count_tokens(state)   # true length, no specials
+```
+
+Sequence cap: `max_length` (default 512, the model ceiling); truncation is
+truncate-state-side-first — the options are the question and are never cut
+to fit the state, and options that alone fill the cap raise instead of
+deciding garbage. Multi-label sigmoids run systematically over-confident
+(B0 §8) — thresholds and calibration live in the consumer, never here.
+
 ## Tokenizer-only counts (Python)
 
 ```python

@@ -23,6 +23,7 @@
 //! - [`vision`] — `JinaV5Vision` (the dynamic-grid image contract)
 
 pub mod acquire;
+pub mod decide;
 pub mod diag;
 pub mod error;
 pub mod jina;
@@ -36,13 +37,16 @@ pub use acquire::{
     artifact_for, artifact_for_task, builtin_models, builtin_tasks, cache_info, cache_info_files,
     fetch_tokenizer_file, lookup_model, lookup_task, parse_owner_name, repo_for_precision,
     Artifact, CacheReport, ModelSpec, TaskKind, TaskSpec, FP16_TEXT_MODEL, FP32_TEXT_MODEL,
-    NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL, RERANK_MINILM, RERANK_MINILM_MODEL,
-    TEXT_NANO, TEXT_SMALL,
+    GLICLASS_SMALL, GLICLASS_SMALL_MODEL, NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
+    RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
 };
 pub use diag::{report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
 pub use rerank::{
     Reranker, RERANK_ABSOLUTE_MAX, RERANK_DEFAULT_MAX,
+};
+pub use decide::{
+    Decider, Decision, Question, DECIDE_ABSOLUTE_MAX, DECIDE_DEFAULT_MAX,
 };
 pub use vision::{
     vision_target_size, JinaV5Vision, VISION_MAX_PIXELS, VISION_MIN_PIXELS,
@@ -321,6 +325,132 @@ impl PyReranker {
                 .score_many(&refs)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
         })
+    }
+
+    #[getter]
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    #[getter]
+    fn used_cuda(&self) -> bool {
+        self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn max_length(&self) -> usize {
+        self.inner.max_len()
+    }
+
+    #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
+    }
+}
+
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "Decider")]
+struct PyDecider {
+    inner: Decider,
+}
+
+/// Parse one (kind, instructions, options) triple into a [`Question`].
+/// `noul` parses fine and fails at decide time — the loud-unsupported
+/// rule, not a silent schema gap.
+#[cfg(feature = "extension-module")]
+fn parse_question(kind: &str, instructions: String, options: Vec<String>) -> PyResult<Question> {
+    match kind {
+        "choice" => Ok(Question::Choice { instructions, options }),
+        "score" => Ok(Question::Score { instructions, options }),
+        "noul" => Ok(Question::Noul { instructions, options }),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "question kind must be 'choice', 'score' or 'noul', got '{other}'"
+        ))),
+    }
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyDecider {
+    #[staticmethod]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, device="auto", max_length=None, precision=None, cpu_arena=false))]
+    fn open(
+        model_id: &str,
+        revision: Option<String>,
+        cache_dir: Option<String>,
+        device: &str,
+        max_length: Option<usize>,
+        precision: Option<&str>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
+        let inner = Decider::open(
+            model_id,
+            revision.as_deref(),
+            cache_dir.map(PathBuf::from),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            precision,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (onnx_path, tokenizer_path, device="auto", max_length=None, cpu_arena=false))]
+    fn open_files(
+        onnx_path: &str,
+        tokenizer_path: &str,
+        device: &str,
+        max_length: Option<usize>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let inner = Decider::open_files(
+            std::path::Path::new(onnx_path),
+            std::path::Path::new(tokenizer_path),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    /// Answer questions over one state: `questions` is a list of
+    /// `(kind, instructions, options)` triples (`kind` one of 'choice',
+    /// 'score', 'noul'). Returns `[(label, [(option, prob), ...]), ...]`
+    /// in question order — one padded session run for the whole batch.
+    #[pyo3(signature = (state, questions))]
+    fn decide(
+        &self,
+        py: Python<'_>,
+        state: &str,
+        questions: Vec<(String, String, Vec<String>)>,
+    ) -> PyResult<Vec<(String, Vec<(String, f32)>)>> {
+        let mut qs = Vec::with_capacity(questions.len());
+        for (kind, instructions, options) in questions {
+            qs.push(parse_question(&kind, instructions, options)?);
+        }
+        py.detach(|| {
+            let ds = self
+                .inner
+                .decide(state, &qs)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+            Ok(ds.into_iter().map(|d| (d.label, d.probabilities)).collect())
+        })
+    }
+
+    fn count_tokens(&self, text: &str) -> PyResult<usize> {
+        self.inner
+            .count_tokens(text)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
     }
 
     #[getter]
@@ -632,6 +762,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaV5>()?;
     m.add_class::<PyJinaTokenizer>()?;
     m.add_class::<PyReranker>()?;
+    m.add_class::<PyDecider>()?;
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;

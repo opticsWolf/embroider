@@ -50,6 +50,14 @@ impl SessionPolicy {
         Self::text_embed()
     }
 
+    /// Measured policy for decide (typed-decision) sessions. Same start
+    /// as rerank — short-sequence forward passes on the same runtime;
+    /// re-measure on decision workloads before retuning, so decide tuning
+    /// can diverge without touching embedding or rerank sessions.
+    pub fn decide_pair() -> Self {
+        Self::text_embed()
+    }
+
     /// Measured policy for text-embedding sessions: Level3, intra =
     /// physical-cores/2, inter = 1 (fastest of the tested configs; do not
     /// mix tuning levels inside one vector index — see the README table).

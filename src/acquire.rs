@@ -38,6 +38,10 @@ pub const VISION_NANO_MODEL: &str = "jina-v5-omni-nano-retrieval-vision";
 /// name the contract directly; the spec's artifacts name the file layout.
 pub const RERANK_MINILM_MODEL: &str = "cross-encoder/ms-marco-MiniLM-L-6-v2";
 pub const RERANK_MMARCO_MODEL: &str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1";
+/// Decide spike id (plan `docs/typed-decision-plan.md` §8): GLiClass
+/// small-v1.0, lowercased canonical id. Uni-encoder labels-spliced input
+/// through the same `open_files` seam as the rerank spikes.
+pub const GLICLASS_SMALL_MODEL: &str = "knowledgator/gliclass-small-v1.0";
 
 /// One downloadable artifact: the repo holding it plus the model file
 /// inside that repo. The external-data sidecar is derived (same stem +
@@ -206,10 +210,25 @@ pub const RERANK_MMARCO: TaskSpec = TaskSpec {
     int8: None,
 };
 
+/// Decide spike, English single/multi-label (plan §8): GLiClass-small
+/// v1.0, 144M. In-repo ONNX (`onnx/model.onnx`) + root `tokenizer.json`
+/// at pinned revision `21edefaf`; only the fp32 tier is listed until a
+/// precision is measured (the quant-spike rule — the in-repo int8 waits
+/// for its own harness, same as the rerank int8). 512 is the DeBERTa-v3
+/// positional ceiling and the pipeline default.
+pub const GLICLASS_SMALL: TaskSpec = TaskSpec {
+    id: GLICLASS_SMALL_MODEL,
+    kind: TaskKind::Decide,
+    max_tokens: 512,
+    fp32: Artifact { repo: GLICLASS_SMALL_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp16: None,
+    int8: None,
+};
+
 /// Builtin task registry. Adding entries never moves existing graphs —
 /// different models, different outputs, no shared vector space.
 pub fn builtin_tasks() -> &'static [TaskSpec] {
-    &[RERANK_MINILM, RERANK_MMARCO]
+    &[RERANK_MINILM, RERANK_MMARCO, GLICLASS_SMALL]
 }
 
 /// Look up a canonical id in the task registry. Unknown ids return
@@ -591,6 +610,12 @@ mod tests {
         // The registries don't leak into each other.
         assert!(lookup_model(RERANK_MINILM_MODEL).is_none());
         assert!(lookup_task(FP32_TEXT_MODEL).is_none());
+        let gli = lookup_task(GLICLASS_SMALL_MODEL).expect("gliclass registered");
+        assert_eq!(gli.kind, TaskKind::Decide);
+        assert_eq!(gli.max_tokens, 512);
+        assert!(gli.fp16.is_none() && gli.int8.is_none());
+        let fp32 = artifact_for_task(GLICLASS_SMALL_MODEL, Precision::Fp32);
+        assert_eq!((fp32.repo, fp32.file), (GLICLASS_SMALL_MODEL, "onnx/model.onnx"));
         assert_eq!(TaskKind::Rerank.as_str(), "rerank");
         assert_eq!(TaskKind::Decide.as_str(), "decide");
     }
