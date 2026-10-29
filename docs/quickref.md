@@ -117,6 +117,11 @@ r = Reranker.open("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 
 # air-gapped: local files only, zero network
 r = Reranker.open_files("model.onnx", "tokenizer.json")
+
+# documents past the 512-token pair cap: sliding windows + max-pool
+r.score_long(query, long_doc)                    # window=max_len, 50% overlap
+r.score_long(query, long_doc, window=512, stride=128)
+r.count_tokens(long_doc)   # true length, no specials; budgets build on this
 ```
 
 Pair cap: `max_length` (default 512, the model ceiling); truncation is

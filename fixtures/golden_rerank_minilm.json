@@ -4,6 +4,12 @@
  "revision": "233902d25c440f23af6f7d6e94d2946bac0bee0a",
  "provenance": "onnxruntime 1.29.0 CPU; OnlySecond truncation max_length=512, batch-longest padding; torch parity max abs diff 2.86e-06 (sentence-transformers 6.2.0, torch 2.15.0+cpu, same revision)",
  "max_length": 512,
+ "token_counts": {
+  "en_relevant": {"query": 7, "doc": 10},
+  "en_irrelevant": {"query": 7, "doc": 19},
+  "de_relevant": {"query": 11, "doc": 18},
+  "de_irrelevant": {"query": 11, "doc": 21}
+ },
  "pairs": {
   "en_relevant": {"query": "What is the capital of France?", "doc": "Paris is the capital and largest city of France."},
   "en_irrelevant": {"query": "What is the capital of France?", "doc": "The honey badger ranges across sub-Saharan Africa, feeding opportunistically on insects."},

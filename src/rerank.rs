@@ -19,7 +19,7 @@ use crate::acquire::{
     artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name,
 };
 use crate::error::{oe, Result};
-use crate::jina::{build_session, load_tokenizer};
+use crate::jina::{build_session, count_tokens_in, load_tokenizer};
 use crate::policy::{resolve_provider_names, DeviceReq, Precision, SessionPolicy};
 use anyhow::anyhow;
 use ndarray::Array2;
@@ -81,12 +81,51 @@ pub(crate) fn load_pair_tokenizer(
 pub struct Reranker {
     session: RwLock<Session>,
     tokenizer: tokenizers::Tokenizer,
+    /// Truncation-free handle: true token counts and raw id streams for
+    /// chunking. The scoring handle above always truncates, so measuring
+    /// through it would cap long documents at the pair limit.
+    plain: tokenizers::Tokenizer,
     max_len: usize,
     model_id: String,
     used_cuda: bool,
     precision: Precision,
     feed_token_type_ids: bool,
     output_name: String,
+}
+
+/// Sliding-window spans over a `doc_len`-token id stream: `budget`-token
+/// windows stepping by `stride`, with the tail always covered (the last
+/// window ends exactly at `doc_len`, overlapping its predecessor when the
+/// length isn't a multiple of the stride). Pure function — the
+/// chunk-planning half of [`Reranker::score_long`], unit-tested without
+/// weights.
+pub(crate) fn plan_windows(
+    doc_len: usize,
+    budget: usize,
+    stride: usize,
+) -> Vec<(usize, usize)> {
+    // Contract (enforced by `score_long` before calling): 1 <= stride <=
+    // budget. A zero stride would loop forever; larger-than-budget
+    // strides leave unscored gaps.
+    debug_assert!(stride >= 1 && stride <= budget);
+    if doc_len == 0 {
+        return vec![(0, 0)];
+    }
+    if doc_len <= budget {
+        return vec![(0, doc_len)];
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start + budget < doc_len {
+        out.push((start, start + budget));
+        start += stride;
+    }
+    // Tail coverage: no text past the last full window goes unscored.
+    let tail = doc_len - budget;
+    if out.last().map(|&(s, _)| s) != Some(tail) {
+        out.push((tail, doc_len));
+    }
+    out
 }
 
 impl Reranker {
@@ -138,6 +177,7 @@ impl Reranker {
         // ---- pair tokenizer (truncation + batch padding configured) ----
         let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
         let tokenizer = load_pair_tokenizer(&tok_path, max_length)?;
+        let plain = load_tokenizer(&tok_path, None)?;
 
         let loaded =
             build_session(&onnx_path, device, &SessionPolicy::rerank_pair(), cpu_arena)?;
@@ -145,6 +185,7 @@ impl Reranker {
         Ok(Self {
             session: RwLock::new(loaded.session),
             tokenizer,
+            plain,
             max_len: max_length,
             model_id: model_id.to_string(),
             used_cuda: loaded.used_cuda,
@@ -184,11 +225,13 @@ impl Reranker {
             ));
         }
         let tokenizer = load_pair_tokenizer(tokenizer_path, max_length)?;
+        let plain = load_tokenizer(tokenizer_path, None)?;
         let loaded =
             build_session(onnx_path, device, &SessionPolicy::rerank_pair(), cpu_arena)?;
         Ok(Self {
             session: RwLock::new(loaded.session),
             tokenizer,
+            plain,
             max_len: max_length,
             model_id: onnx_path.display().to_string(),
             used_cuda: loaded.used_cuda,
@@ -281,6 +324,110 @@ impl Reranker {
         Ok(logits.column(0).to_vec())
     }
 
+    /// Token count without special tokens — the same helper JinaV5 uses
+    /// (shared [`count_tokens_in`]), measured through the truncation-free
+    /// handle so long documents report their true length. Pair overhead
+    /// (the 3–4 template specials) is NOT included — size windows against
+    /// `score_long`'s budget accounting, not this number alone.
+    pub fn count_tokens(&self, text: &str) -> Result<usize> {
+        count_tokens_in(&self.plain, text)
+    }
+
+    /// Score a document longer than the pair cap: slide a `window`-token
+    /// pair budget over the document with `stride`-token steps, score each
+    /// (query, chunk) pair through [`Reranker::score_many`], and return
+    /// the best chunk score (MaxP aggregation — a document is relevant if
+    /// any part of it answers the query).
+    ///
+    /// `window` caps the whole pair (query + template + chunk) and may not
+    /// exceed [`Reranker::max_len`]; `stride` steps the window starts and
+    /// must fit the document budget left after the query and template
+    /// (larger strides leave unscored gaps, so they fail loudly instead).
+    /// The query side is never truncated; a query that alone fills the
+    /// window errors. Pass `None` for the session default (`max_len` room
+    /// with 50%-overlap steps).
+    pub fn score_long(
+        &self,
+        query: &str,
+        doc: &str,
+        window: Option<usize>,
+        stride: Option<usize>,
+    ) -> Result<f32> {
+        let window = match window {
+            None => self.max_len,
+            Some(n) if (1..=self.max_len).contains(&n) => n,
+            Some(n) => {
+                return Err(anyhow!(
+                    "window must be within 1..={} (the session pair cap), got {n}",
+                    self.max_len
+                ))
+            }
+        };
+        if let Some(0) = stride {
+            return Err(anyhow!("stride must be >= 1, got 0"));
+        }
+        // Measure through the truncation-free handle: template overhead is
+        // exact per architecture (BERT 3 vs XLM-R 4 specials), derived by
+        // diffing a pair encode against its bare query — never hardcoded.
+        let q_ids = self
+            .plain
+            .encode(query, false)
+            .map_err(|e| anyhow!("query tokenization failed: {e}"))?;
+        let d_ids = self
+            .plain
+            .encode(doc, false)
+            .map_err(|e| anyhow!("document tokenization failed: {e}"))?;
+        let q_len = q_ids.get_ids().len();
+        let d_len = d_ids.get_ids().len();
+        let templated = self
+            .plain
+            .encode((query, ""), true)
+            .map_err(|e| anyhow!("template probe failed: {e}"))?;
+        let overhead = templated.get_ids().len().saturating_sub(q_len);
+        let budget = window
+            .checked_sub(q_len + overhead)
+            .filter(|&b| b > 0)
+            .ok_or_else(|| {
+                anyhow!(
+                    "query encodes to {q_len} tokens plus {overhead} template specials, \
+                     filling the {window}-token window with no room for the document — \
+                     shorten the query or raise window (max {})",
+                    self.max_len
+                )
+            })?;
+        // Default: 50% overlap.
+        let stride = stride.unwrap_or(std::cmp::max(1, budget / 2));
+        if stride > budget {
+            return Err(anyhow!(
+                "stride {stride} exceeds the {budget}-token document budget \
+                 (window {window} minus query+template) and would leave unscored gaps — \
+                 widen window or shrink stride"
+            ));
+        }
+        let spans = plan_windows(d_len, budget, stride);
+        // Decode–re-encode round-trips exactly for these tokenizers; each
+        // chunk then flows through the standard pair seam (truncation +
+        // batch padding), so over-long windows stay impossible by
+        // construction and every chunk is scored identically to a direct
+        // `score_one` on the same text.
+        let doc_ids = d_ids.get_ids();
+        let mut chunks: Vec<String> = Vec::with_capacity(spans.len());
+        for (s, e) in &spans {
+            chunks.push(
+                self.plain
+                    .decode(&doc_ids[*s..*e], true)
+                    .map_err(|e| anyhow!("chunk decode failed: {e}"))?,
+            );
+        }
+        let refs: Vec<(&str, &str)> =
+            chunks.iter().map(|c| (query, c.as_str())).collect();
+        let scores = self.score_many(&refs)?;
+        scores
+            .into_iter()
+            .max_by(|a, b| a.total_cmp(b))
+            .ok_or_else(|| anyhow!("score_long produced no chunk scores"))
+    }
+
     /// Effective pair cap (truncation ceiling for scores).
     pub fn max_len(&self) -> usize {
         self.max_len
@@ -315,6 +462,49 @@ mod tests {
         assert_eq!(check_pair_limit_for(Some(128), spec.max_tokens).unwrap(), 128);
         assert!(check_pair_limit_for(Some(0), spec.max_tokens).is_err());
         assert!(check_pair_limit_for(Some(513), spec.max_tokens).is_err());
+    }
+
+    // ---- sliding-window planning (no weights needed) ------------------------
+
+    #[test]
+    fn plan_windows_single_short_doc() {
+        assert_eq!(plan_windows(0, 400, 200), vec![(0, 0)]);
+        assert_eq!(plan_windows(100, 400, 200), vec![(0, 100)]);
+        assert_eq!(plan_windows(400, 400, 200), vec![(0, 400)]);
+    }
+
+    #[test]
+    fn plan_windows_slides_with_tail_coverage() {
+        // Overlapping stride with a ragged tail: the last window ends
+        // exactly at the document end.
+        assert_eq!(
+            plan_windows(1000, 400, 350),
+            vec![(0, 400), (350, 750), (600, 1000)]
+        );
+        // Exact multiple: no duplicate tail window.
+        assert_eq!(plan_windows(800, 400, 400), vec![(0, 400), (400, 800)]);
+        // Contiguous stride, ragged tail overlaps backward.
+        assert_eq!(plan_windows(500, 400, 400), vec![(0, 400), (100, 500)]);
+        // Full overlap still terminates with full coverage.
+        assert_eq!(plan_windows(5, 3, 1), vec![(0, 3), (1, 4), (2, 5)]);
+    }
+
+    #[test]
+    fn plan_windows_never_gaps_or_overruns() {
+        for (len, budget, stride) in
+            [(10, 3, 2), (99, 40, 17), (1000, 400, 350), (513, 512, 256)]
+        {
+            let w = plan_windows(len, budget, stride);
+            assert_eq!(w.first().unwrap().0, 0);
+            assert_eq!(w.last().unwrap().1, len);
+            for (i, (s, e)) in w.iter().enumerate() {
+                assert!(e - s <= budget, "window {i} over budget");
+                if i > 0 {
+                    assert!(w[i - 1].0 < *s, "window {i} does not advance");
+                    assert!(w[i - 1].1 > *s, "window {i} leaves a gap");
+                }
+            }
+        }
     }
 
     #[test]

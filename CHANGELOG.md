@@ -3,6 +3,23 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.4.1] — 2026-10-29
+
+### Added
+- Long-document reranking (`Reranker::score_long`, Python
+  `r.score_long(query, doc, window=None, stride=None)`): sliding windows
+  over the document with max-pool (MaxP) aggregation. Window caps the
+  whole pair (default: session `max_len`); stride steps the windows
+  (default: 50% overlap); larger-than-budget strides and
+  query-fills-window fail loudly. Chunk planning is a pure,
+  weight-free unit-tested function; template overhead is derived per
+  architecture, never hardcoded.
+- `Reranker::count_tokens` (Python `r.count_tokens`): true token counts
+  without specials via a truncation-free handle — the same helper JinaV5
+  uses, reused. Golden fixtures pin per-pair counts; the ignored e2e
+  asserts single-window equivalence with `score_one`, multi-window
+  MaxP sanity, and validation order.
+
 ## [0.4.0] — 2026-10-28
 
 ### Added

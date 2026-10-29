@@ -290,6 +290,28 @@ impl PyReranker {
         })
     }
 
+    #[pyo3(signature = (query, doc, window=None, stride=None))]
+    fn score_long(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        doc: &str,
+        window: Option<usize>,
+        stride: Option<usize>,
+    ) -> PyResult<f32> {
+        py.detach(|| {
+            self.inner
+                .score_long(query, doc, window, stride)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+        })
+    }
+
+    fn count_tokens(&self, text: &str) -> PyResult<usize> {
+        self.inner
+            .count_tokens(text)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+    }
+
     #[pyo3(signature = (pairs))]
     fn score_batch(&self, py: Python<'_>, pairs: Vec<(String, String)>) -> PyResult<Vec<f32>> {
         let refs: Vec<(&str, &str)> =

@@ -74,6 +74,65 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
         by_key["de_relevant"] > by_key["de_irrelevant"],
         "{by_key:?}"
     );
+
+    // Token counts pin the Rust tokenizer against the Python reference
+    // (same revision, no specials) — chunking budgets build on these.
+    let counts = fx["token_counts"].as_object().expect("token_counts");
+    for (i, k) in keys.iter().enumerate() {
+        let (q, d) = (&batch[i].0, &batch[i].1);
+        assert_eq!(
+            r.count_tokens(q).expect("count"),
+            counts[k]["query"].as_u64().expect("query count") as usize,
+            "{k} query"
+        );
+        assert_eq!(
+            r.count_tokens(d).expect("count"),
+            counts[k]["doc"].as_u64().expect("doc count") as usize,
+            "{k} doc"
+        );
+    }
+
+    // score_long on a single-window pair must equal score_one on the same
+    // text (decode–re-encode round-trips exactly; the same pair seam runs).
+    for (i, k) in keys.iter().enumerate() {
+        let (q, d) = (batch[i].0.as_str(), batch[i].1.as_str());
+        let long = r
+            .score_long(q, d, Some(512), Some(256))
+            .expect("score_long single-window");
+        let d = (long as f64 - got[i] as f64).abs();
+        assert!(d <= 1e-6, "{k}: score_long {long} vs score {got:?} (|Δ|={d})");
+    }
+
+    // A document past the cap chunks and max-pools instead of truncating:
+    // repeat the irrelevant doc ~30x (well past 512 tokens) and check the
+    // long path runs, stays finite, and still prefers the relevant doc.
+    let long_doc = batch[1].1.repeat(30);
+    assert!(r.count_tokens(&long_doc).expect("count") > 512);
+    let long_score = r
+        .score_long(&batch[1].0, &long_doc, None, None)
+        .expect("score_long multi-window");
+    assert!(long_score.is_finite(), "{long_score}");
+    // MaxP sanity: the long irrelevant doc must not outrank the short
+    // relevant one for the same query.
+    assert!(
+        by_key["en_relevant"] > long_score as f64,
+        "relevant {} vs long-irrelevant {long_score}",
+        by_key["en_relevant"]
+    );
+
+    // Validation fires before any chunking work.
+    let e = r
+        .score_long("q", "d", Some(0), None)
+        .err()
+        .expect("window 0 should fail")
+        .to_string();
+    assert!(e.contains("1..="), "{e}");
+    let e = r
+        .score_long("q", "d", None, Some(0))
+        .err()
+        .expect("stride 0 should fail")
+        .to_string();
+    assert!(e.contains(">= 1"), "{e}");
 }
 
 #[test]

@@ -69,6 +69,10 @@ pub struct TaskSpec {
 > Remaining: production bakeoff (v2-m3 export vs Qwen3-seq-cls vs
 > jina-v2-multilingual) on okfgraph's language mix.
 >
+> **score_long landed 2026-10-29 (0.4.1).** `Reranker::score_long` +
+> `count_tokens` (reuses JinaV5's helper on a truncation-free handle);
+> fixtures pin token counts, e2e pins single-window equivalence + MaxP.
+>
 > **Qwen3-0.6B-seq-cls proposal 2026-10-29: DO NOT ADOPT now.** Artifact
 > verified (`shawnw3i/...-seq-cls-ONNX` @ e5d273d: single 1.1GB model.onnx,
 > opset 17, 2-input, logits [B,1], Apache-2.0; README Mars/Venus example
