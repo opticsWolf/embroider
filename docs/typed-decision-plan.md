@@ -313,6 +313,16 @@ billing softmax(L/1.7601) reproduces the agent's [0.7463, 0.2086,
   calls that dishonest). No `binning_map` ships by default (`None`).
 - **G4: N/A** (native fp32). **G5:** per-type cases pin in goldens.
 
+- **Siblings (same recipe, 2026-10-29):** base/English @ `55cf4c4e`
+  (G1 1833 nodes, G2 4.7e-6; CPU ~220 ms / CUDA ~15 ms; quality caveat:
+  near-chance zero-shot per Ollaya, export faithful but not for
+  classifier duty) and multilingual @ `e4e9ddf2` (G1 1479 nodes, G2
+  7.9e-6; CPU ~97 ms / CUDA ~10 ms, fastest of the three on CPU).
+  All three publish as public single-graph fp32 repos under
+  `opticsWolf/laya-{typed-decisions,english,multilingual}-fp32-onnx`
+  (manifest-pinned SHA-256); okfgraph serves via `ONNXAgent`, no
+  `build_sequence` Rust port.
+
 ## 10. External corroboration (2026-10-29, via gossamer)
 
 Three sources, one consistent story — classifier-as-reranker is a
