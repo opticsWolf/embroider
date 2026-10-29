@@ -70,11 +70,19 @@ pub struct TaskSpec {
 > jina-v2-multilingual) on okfgraph's language mix.
 >
 > **Precision sweep 2026-10-28 (RTX 3090 + Ryzen 9 5950X, ORT 1.29.0).**
-> Latency ms/pair — CPU fp32: L-6 1.3–1.6, mMARCO 2.1–3.2. CUDA fp32:
-> ~1.1 (L-6) / ~2.1 (mMARCO) at batch 2, collapsing to 0.09–0.13 / 0.25–0.28
-> at batch 16–32 (~14x / ~8x vs CPU — GPU pays off at batch, launch-bound
-> below). CUDA↔CPU logit drift ~1e-3 (kernel-order noise; goldens stay
-> CPU-only). CUDA path confirmed working; e2e stays CPU-gated like vision.
+> Latency ms/pair — CPU fp32: L-6 1.3–1.6, mMARCO 2.1–3.2 (flat vs batch).
+> CUDA fp32 short pairs (~20 tok), ms/pair, corrected 2nd run: L-6
+> b1 3.6 → b2 2.2 → b4 2.0 → b8 1.6 → b16 1.2 → b32 1.0; mMARCO b1 5.3 →
+> b16 2.1 → b32 1.7. So: CUDA ≈ CPU or worse at b1 (launch overhead),
+> ~1.3–1.9x better at batch, saturating ~b16 — short forwards are
+> overhead-bound on both runtimes. (An earlier 14x/8x reading failed to
+> reproduce and is discarded as a measurement artifact.) Long pairs
+> (~500 tok): CUDA b1 ≈ CPU b1 (L-6 29.5 vs 21.1, mMARCO 49.2 vs 49.9);
+> long-batch CUDA degraded anomalously on this desktop rig — no claim
+> until a controlled rerun. CUDA↔CPU logit drift ~1e-3 (kernel-order
+> noise; goldens stay CPU-only). CUDA path confirmed working; e2e stays
+> CPU-gated like vision. Practical upshot: batch candidate lists through
+> one `score_batch` call for a free ~1.5x on GPU; CPU stays respectable.
 > fp16 (optimum `--dtype fp16` export, keep-io): drift 3.3e-3 (L-6) /
 > 5.3e-3 (mMARCO), order kept — but SLOWER than fp32 on both CPU (~1.5–2x)
 > and CUDA (launch-bound tiny graphs). Not shipped; warn-and-honour stays.
