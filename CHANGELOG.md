@@ -15,6 +15,14 @@ All notable changes to `embroider` are documented here. Format follows
   Venv-spelling duplicates list once (canonicalized). Covers the
   harness need: save the exact machine layout next to bench numbers.
   Rust: `diag::{runtime_report, save_runtime_report}`, 2 unit tests.
+- `embroider.configure_runtime(dylib_path, dll_dirs)` (Rust
+  `diag::configure_runtime`): the write half of the inventory.
+  Validated dylib setter (pre-first-`open()` contract — the probe
+  counts as a first touch) + `PATH` prepend for the CUDA/cuDNN dirs
+  (effective immediately; proven: fresh process, no ambient env,
+  GLiClass-small on CUDA via `load_dirs`). `load_dirs` added to the
+  report (dylib dir + every reported DLL's parent); venv scan falls
+  back to the interpreter's own `sys.prefix`; 2 more unit tests.
 
 ## [0.8.0] — 2026-10-29
 

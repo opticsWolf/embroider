@@ -44,7 +44,7 @@ pub use acquire::{
     NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
     RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
 };
-pub use diag::{report, runtime_report, save_runtime_report, OrtReport};
+pub use diag::{configure_runtime, report, runtime_report, runtime_report_for, save_runtime_report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
 pub use rerank::{
     Reranker, RERANK_ABSOLUTE_MAX, RERANK_DEFAULT_MAX,
@@ -1067,15 +1067,42 @@ fn value_to_py<'py>(
 #[cfg(feature = "extension-module")]
 #[pyfunction(name = "runtime_info")]
 fn runtime_info_py(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-    value_to_py(py, &diag::runtime_report())
+    // The interpreter knows its own prefix even when the venv was never
+    // activated (no VIRTUAL_ENV) — pass it so the install scan works.
+    let venv: Option<String> = std::env::var("VIRTUAL_ENV").ok().or_else(|| {
+        py.import("sys")
+            .ok()?
+            .getattr("prefix")
+            .ok()?
+            .extract()
+            .ok()
+    });
+    value_to_py(py, &diag::runtime_report_for(venv.as_deref()))
+}
+
+/// Set the paths the ONNX Runtime loader needs: `dylib_path` becomes
+/// `ORT_DYLIB_PATH` (must exist; effective when set before the first
+/// `open()` in this process), `dll_dirs` are prepended to `PATH`
+/// (effective immediately — pass `runtime_info()["load_dirs"]` to
+/// reproduce a saved layout). Returns the post-call `runtime_info`.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "configure_runtime")]
+#[pyo3(signature = (dylib_path=None, dll_dirs=None))]
+fn configure_runtime_py(
+    py: Python<'_>,
+    dylib_path: Option<String>,
+    dll_dirs: Option<Vec<String>>,
+) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+    let rep = diag::configure_runtime(dylib_path.as_deref(), &dll_dirs.unwrap_or_default())
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+    value_to_py(py, &rep)
 }
 
 /// Write [`diag::runtime_report`] as pretty JSON to `path` (creating
 /// parent dirs) and return the path written.
 #[cfg(feature = "extension-module")]
 #[pyfunction(name = "save_runtime_info")]
-fn save_runtime_info_py(path: &str) -> PyResult<String> {
-    diag::save_runtime_report(std::path::Path::new(path))
+fn save_runtime_info_py(path: &str) -> PyResult<String> {    diag::save_runtime_report(std::path::Path::new(path))
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
 }
 
@@ -1093,6 +1120,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(cache_info_files_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(runtime_info_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(configure_runtime_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(save_runtime_info_py, m)?)?;
     m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;

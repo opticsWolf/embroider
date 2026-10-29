@@ -14,6 +14,60 @@
 
 use crate::probe::cuda_available;
 
+/// Set the paths the ONNX Runtime loader needs, programmatically instead
+/// of ambiently. `dylib` (when given) must exist — it becomes the new
+/// `ORT_DYLIB_PATH`. `dll_dirs` (existing dirs only, silently skipping the
+/// rest) are prepended to `PATH`, which is what makes the CUDA/cuDNN DLLs
+/// from `load_dirs` resolve out of site-packages via plain `LoadLibrary`.
+///
+/// Timing contract: `ORT_DYLIB_PATH` is read when ort first initializes in
+/// this process, so set `dylib` before the first `open()` — afterwards it
+/// is stored but inert for the running process (still reported by
+/// [`runtime_report`]). `PATH` edits apply to every later `LoadLibrary`,
+/// so `dll_dirs` work at any time. Returns the post-call
+/// [`runtime_report`] so the caller sees what took effect.
+pub fn configure_runtime(
+    dylib: Option<&str>,
+    dll_dirs: &[String],
+) -> anyhow::Result<serde_json::Value> {
+    if let Some(d) = dylib {
+        let p = std::path::Path::new(d);
+        if !p.is_file() {
+            anyhow::bail!("ORT dylib not found: {d}");
+        }
+        // SAFETY: process-start-style configuration before ort init; the
+        // caller upholds the timing contract above.
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", d);
+        }
+    }
+    if !dll_dirs.is_empty() {
+        let mut seen: std::collections::HashSet<String> = Default::default();
+        let mut prepend: Vec<String> = Vec::new();
+        for dir in dll_dirs {
+            if !std::path::Path::new(dir).is_dir() {
+                continue;
+            }
+            if seen.insert(dir.clone()) {
+                prepend.push(dir.clone());
+            }
+        }
+        if !prepend.is_empty() {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let old = std::env::var("PATH").unwrap_or_default();
+            let mut parts: Vec<&str> = prepend.iter().map(String::as_str).collect();
+            if !old.is_empty() {
+                parts.push(&old);
+            }
+            // SAFETY: same configuration window as above.
+            unsafe {
+                std::env::set_var("PATH", parts.join(sep));
+            }
+        }
+    }
+    Ok(runtime_report())
+}
+
 /// A snapshot of the ONNX Runtime situation in this process.
 #[derive(Clone, Debug)]
 pub struct OrtReport {
@@ -144,11 +198,13 @@ fn scan_nvidia_dist(
         .collect()
 }
 
-/// Candidate site-packages dirs for the active interpreter, if visible.
-fn site_packages_dirs() -> Vec<std::path::PathBuf> {
-    let venv = match std::env::var("VIRTUAL_ENV") {
-        Ok(v) => std::path::PathBuf::from(v),
-        Err(_) => return Vec::new(),
+/// Candidate site-packages dirs for `venv` (an explicit interpreter
+/// prefix — the binding fills in `sys.prefix` when `VIRTUAL_ENV` is
+/// unset, so a non-activated interpreter still scans its own venv).
+fn site_packages_dirs_for(venv: Option<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let venv = match venv {
+        Some(v) => v,
+        None => return Vec::new(),
     };
     let mut out = vec![venv.join("Lib").join("site-packages")];
     out.push(venv.join("lib").join("site-packages"));
@@ -172,6 +228,14 @@ fn site_packages_dirs() -> Vec<std::path::PathBuf> {
 /// `nvidia*` dists ship, and the CUDA-usability probe. Pure directory
 /// scans plus the existing probe — no sessions are built.
 pub fn runtime_report() -> serde_json::Value {
+    runtime_report_for(None)
+}
+
+/// [`runtime_report`] scoped to an explicit venv prefix (the binding
+/// passes `VIRTUAL_ENV`, falling back to the interpreter's own
+/// `sys.prefix`, so activation is not required to see the installs).
+pub fn runtime_report_for(venv: Option<&str>) -> serde_json::Value {
+    let venv = venv.map(std::path::PathBuf::from);
     let dylib = std::env::var("ORT_DYLIB_PATH").ok();
     let (dylib_exists, siblings) = match &dylib {
         Some(p) => {
@@ -198,7 +262,7 @@ pub fn runtime_report() -> serde_json::Value {
     let mut ort_installs = Vec::new();
     let mut cuda_runtimes = Vec::new();
     let mut seen: std::collections::HashSet<String> = Default::default();
-    for sp in site_packages_dirs() {
+    for sp in site_packages_dirs_for(venv.clone()) {
         let Ok(rd) = std::fs::read_dir(&sp) else {
             continue;
         };
@@ -234,6 +298,26 @@ pub fn runtime_report() -> serde_json::Value {
             }
         }
     }
+    // Every directory a loader must see: the dylib's own dir plus the
+    // parent of each reported DLL. A harness prepends exactly this list
+    // to the DLL search path (`os.add_dll_directory` / PATH) before the
+    // first session opens — that is what makes `cudnn64_9.dll` resolve
+    // out of site-packages without copying files around.
+    let mut load_dirs: std::collections::BTreeSet<String> = Default::default();
+    if let Some(p) = &dylib {
+        if let Some(parent) = std::path::Path::new(p).parent() {
+            load_dirs.insert(parent.to_string_lossy().into_owned());
+        }
+    }
+    for group in &cuda_runtimes {
+        for dll in group["dlls"].as_array().cloned().unwrap_or_default() {
+            if let Some(d) = dll.as_str().and_then(|d| std::path::Path::new(d).parent()) {
+                load_dirs.insert(d.to_string_lossy().into_owned());
+            }
+        }
+    }
+    // The CUDA EP also resolves cuBLAS/cuDNN through PATH entries, so the
+    // nvidia bin dirs matter even when the dylib lives elsewhere.
     serde_json::json!({
         "ort_dylib": dylib,
         "ort_dylib_exists": dylib_exists,
@@ -241,6 +325,7 @@ pub fn runtime_report() -> serde_json::Value {
         "cuda_usable": cuda_available(),
         "ort_installs": ort_installs,
         "cuda_runtime_dlls": cuda_runtimes,
+        "load_dirs": load_dirs.into_iter().collect::<Vec<_>>(),
         "virtual_env": std::env::var("VIRTUAL_ENV").ok(),
     })
 }
@@ -274,6 +359,7 @@ mod tests {
             "cuda_usable",
             "ort_installs",
             "cuda_runtime_dlls",
+            "load_dirs",
             "virtual_env",
         ] {
             assert!(rep.get(key).is_some(), "missing key {key}");
@@ -281,6 +367,29 @@ mod tests {
         assert!(rep["cuda_usable"].is_boolean());
         assert!(rep["ort_installs"].is_array());
         assert!(rep["cuda_runtime_dlls"].is_array());
+    }
+
+    #[test]
+    fn configure_runtime_rejects_missing_dylib() {
+        let err = configure_runtime(Some("D:/no/such/onnxruntime.dll"), &[])
+            .err()
+            .expect("must fail")
+            .to_string();
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    #[test]
+    fn configure_runtime_prepends_dll_dirs() {
+        let dir = std::env::temp_dir().join("embroider-dll-dir-test");
+        std::fs::create_dir_all(&dir).ok();
+        let before = std::env::var("PATH").unwrap_or_default();
+        configure_runtime(None, &[dir.to_string_lossy().into_owned()]).expect("ok");
+        let after = std::env::var("PATH").unwrap_or_default();
+        assert!(after.starts_with(dir.to_str().unwrap()), "{after}");
+        // Restore so test order never leaks PATH edits.
+        unsafe {
+            std::env::set_var("PATH", before);
+        }
     }
 
     #[test]

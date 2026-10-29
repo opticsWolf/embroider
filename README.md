@@ -399,11 +399,23 @@ bench harness saves it next to its numbers so a later reader knows
 exactly which dylib, providers and CUDA files produced them:
 
 ```python
-from embroider import runtime_info, save_runtime_info
+from embroider import runtime_info, save_runtime_info, configure_runtime
 info = runtime_info()
 info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
 save_runtime_info("bench/run-001/runtime.json")
 ```
+
+`configure_runtime(dylib_path=None, dll_dirs=None)` is the write
+half: `dylib_path` becomes `ORT_DYLIB_PATH` (must exist; effective
+only before the first `open()` in the process — ort pins the first
+library it initializes, and even `runtime_info()`'s probe counts as
+a first touch, so set the dylib before anything else), `dll_dirs`
+are prepended to `PATH` (effective immediately — pass
+`info["load_dirs"]` to reproduce a saved layout, which is what
+makes `cudnn64_9.dll` resolve out of site-packages for cuDNN-backed
+ops like GLiClass's `ReduceMax`). Returns the post-call report. The
+venv scan follows `VIRTUAL_ENV` with a `sys.prefix` fallback, so a
+non-activated interpreter still sees its own installs.
 
 The venv scan follows `VIRTUAL_ENV` (unset = installs unknown, the
 probe fields still report); duplicate spellings of one venv
