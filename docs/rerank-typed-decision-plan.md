@@ -69,6 +69,19 @@ pub struct TaskSpec {
 > Remaining: production bakeoff (v2-m3 export vs Qwen3-seq-cls vs
 > jina-v2-multilingual) on okfgraph's language mix.
 >
+> **Qwen3-0.6B-seq-cls proposal 2026-10-29: DO NOT ADOPT now.** Artifact
+> verified (`shawnw3i/...-seq-cls-ONNX` @ e5d273d: single 1.1GB model.onnx,
+> opset 17, 2-input, logits [B,1], Apache-2.0; README Mars/Venus example
+> reproduced modulo sigmoid). Integration fits the seam (left padding +
+> formatter helper + 32K ceiling — small change). KILLER: ~120–150 ms/pair
+> CPU (~100x the spikes; an early 1417 ms single-sample was cold-start
+> noise, superseded by multi-rep runs) with NO demonstrated CUDA relief
+> on the 1.29 pin (EP load flaky on this box; GQA/RoPE-heavy graph →
+> expected fallback). mMARCO already covers 100+ langs at 1/50th the cost.
+> Adopt IFF a bakeoff shows a quality gap that matters AND serving closes
+> the cost gap. bge-v2-m3 (export) and jina-v2-multilingual still
+> unexamined — the production slot stays open.
+>
 > **Precision sweep 2026-10-28 (RTX 3090 + Ryzen 9 5950X, ORT 1.29.0).**
 > Latency ms/pair — CPU fp32: L-6 1.3–1.6, mMARCO 2.1–3.2 (flat vs batch).
 > CUDA fp32 short pairs (~20 tok), ms/pair, corrected 2nd run: L-6
