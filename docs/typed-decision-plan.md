@@ -40,22 +40,39 @@ design — the single-pass property is the whole point), threshold policy
   the ONNX graph is the contract; pin bytes + fixture it (the custom-arch
   risk from the old plan, unchanged).
 
-### 1b. GLiClass-small — general classifier (fallback)
+### 1b. GLiClass family — general classifiers (fallback pool)
 
-- `knowledgator/gliclass-small-v1.0` (lowercased canonical id):
-  `GLiClassModel`, Apache-2.0, card explicitly allows commercial use.
-- **In-repo** `onnx/model.onnx` + `onnx/model-int8-quantized.onnx`, root
-  `tokenizer.json` — the easiest acquisition of any candidate so far.
-- Labels-spliced input format (ported via the `gliclass` pipeline or
-  `trust_remote_code`); pipeline thresholds (`threshold=0.5`) stay
-  consumer-side per §0 conventions. 144M single-pass.
+All `GLiClassModel`, all Apache-2.0, single-pass labels-spliced input
+(ported via the `gliclass` pipeline or `trust_remote_code`); pipeline
+thresholds stay consumer-side per §0 conventions. Family survey 2026-10-29
+(repo storage bundles all files; downloads/month trail the id):
+
+| Repo | Gen / encoder era | Repo size | In-repo ONNX | Role |
+|---|---|---|---|---|
+| `knowledgator/gliclass-small-v1.0` | v1.0 DeBERTa, 144M | 1.3 GB | ✅ `onnx/model.onnx` + int8, root tokenizer | **B0-first**: cheapest acquisition, unblocks the `decide.rs` shape |
+| `knowledgator/gliclass-base-v1.0` / `-large-v1.0` | v1.0, 186M / 438M | — | verify (`-lw` + `-init` variants also exist) | size-up if small underperforms |
+| `knowledgator/gliclass-edge-v3.0` | v3.0, ~32M est. (131 MB repo — smallest official) | 131 MB | ❌ none | tiny candidate, needs self-export |
+| `knowledgator/gliclass-base-v3.0` | v3.0 (most-pulled GLiClass, 6.7k dl) | 749 MB | ❌ none | quality candidate, needs self-export |
+| `knowledgator/gliclass-modern-base/large-v3.0` | v3.0 ModernBERT | 606 MB / 1.6 GB | ❌ none | modern-encoder variants, self-export |
+| `knowledgator/gliclass-large-v3.0` | v3.0, ~440M est. | 1.8 GB | ❌ none | top-size v3, self-export |
+| `knowledgator/gliclass-v4-edge` | v4 | 3.3 GB (bundles onnx/) | ✅ `onnx/model.onnx` + `model_q8.onnx` | newest official ONNX; second source |
+| `cnmoro/gliclass-*-v3.0-onnx` (edge/base/large/modern-large) | community v3.0 exports (`model.onnx` + `model_i8.onnx`) | — | ⚠️ **no licence tag** — cross-check only, never the pin | external corroboration |
+
+Out of scope: `-init` checkpoints, `-lw` lite variants (revisit if the
+base pick is close but heavy), bi-encoder/fused variants (different
+tradeoff, breaks the single-pass requirement), backbone swaps
+(llama-1.3B, qwen-0.5B/1.5B, v4-2b — GPU-class), third-party finetunes
+(BioMike polished etc.).
 
 ### Decision rule (unchanged)
 
 Laya if its ONNX graph loads on the 1.29 pin at parity — native typed
-questions outrank GLiClass's smaller size. GLiClass-small stays the
-fallback (and its in-repo int8 makes it the precision-sweep second
-source either way).
+questions outrank GLiClass's smaller size. Inside the GLiClass pool:
+B0-first is small-v1.0 (in-repo ONNX unblocks `decide.rs` even if Laya
+wins — same seam either way); v4-edge is the official-ONNX second source
+(newest graph + q8 for the precision sweep); v3-base/edge enter only via
+self-export if the v1/v4 graphs disappoint on quality. Community cnmoro
+exports are corroboration, never registry pins (untagged licence).
 
 ## 2. Architecture to build (`src/decide.rs`)
 
