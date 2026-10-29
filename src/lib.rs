@@ -44,7 +44,7 @@ pub use acquire::{
     NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
     RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
 };
-pub use diag::{report, OrtReport};
+pub use diag::{report, runtime_report, save_runtime_report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
 pub use rerank::{
     Reranker, RERANK_ABSOLUTE_MAX, RERANK_DEFAULT_MAX,
@@ -1020,6 +1020,65 @@ fn cache_info_files_py<'py>(
     report_to_dict(py, &rep)
 }
 
+/// Convert a [`serde_json::Value`] tree into Python objects (None /
+/// bool / int / float / str / list / dict) for [`runtime_info`].
+#[cfg(feature = "extension-module")]
+fn value_to_py<'py>(
+    py: Python<'py>,
+    v: &serde_json::Value,
+) -> PyResult<pyo3::Bound<'py, pyo3::PyAny>> {
+    use pyo3::IntoPyObject;
+    use pyo3::types::{PyDict, PyList};
+    match v {
+        serde_json::Value::Null => Ok(py.None().into_bound(py)),
+        serde_json::Value::Bool(b) => Ok(pyo3::types::PyBool::new(py, *b).to_owned().into_any()),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.into_any())
+            } else if let Some(u) = n.as_u64() {
+                Ok(u.into_pyobject(py)?.into_any())
+            } else {
+                Ok(n.as_f64().unwrap_or(f64::NAN).into_pyobject(py)?.into_any())
+            }
+        }
+        serde_json::Value::String(st) => Ok(st.into_pyobject(py)?.into_any()),
+        serde_json::Value::Array(items) => {
+            let list = PyList::empty(py);
+            for item in items {
+                list.append(value_to_py(py, item)?)?;
+            }
+            Ok(list.into_any())
+        }
+        serde_json::Value::Object(map) => {
+            let dict = PyDict::new(py);
+            for (k, item) in map {
+                dict.set_item(k, value_to_py(py, item)?)?;
+            }
+            Ok(dict.into_any())
+        }
+    }
+}
+
+/// Inventory the ONNX Runtime installs visible from this process — the
+/// loaded dylib (`ORT_DYLIB_PATH`), its sibling provider DLLs, every
+/// `onnxruntime*` dist in the active venv, the CUDA/cuDNN runtime DLLs
+/// the `nvidia*` dists ship, and the CUDA-usability probe. Returns a
+/// plain dict; save it with `save_runtime_info` next to bench numbers.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "runtime_info")]
+fn runtime_info_py(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+    value_to_py(py, &diag::runtime_report())
+}
+
+/// Write [`diag::runtime_report`] as pretty JSON to `path` (creating
+/// parent dirs) and return the path written.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "save_runtime_info")]
+fn save_runtime_info_py(path: &str) -> PyResult<String> {
+    diag::save_runtime_report(std::path::Path::new(path))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+}
+
 #[cfg(feature = "extension-module")]
 #[pymodule]
 fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1033,6 +1092,8 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_files_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(runtime_info_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(save_runtime_info_py, m)?)?;
     m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;
     m.add("MAX_LENGTH", MAX_LENGTH)?;

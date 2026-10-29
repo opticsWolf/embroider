@@ -386,6 +386,32 @@ pairs, `cached` is true when every required file is present, `model_id`
 echoes the repo, and `precision` is `None`. Same offline contract, same
 dict keys — the surface bobine's `model_status()` builds on.
 
+### Runtime inventory (which dylib, which CUDA)
+
+`embroider.runtime_info()` inventories the ONNX Runtime situation in
+one dict: the loaded dylib (`ORT_DYLIB_PATH`, with existence check),
+its sibling provider DLLs, every `onnxruntime*` install in the active
+venv (CPU and GPU builds side by side), the CUDA/cuDNN runtime DLLs
+the `nvidia*` dists ship (grouped: `nvidia/cu13`, `nvidia/cudnn`),
+and the CUDA-usability probe. `embroider.save_runtime_info(path)`
+writes the same report as pretty JSON (creating parent dirs) — a
+bench harness saves it next to its numbers so a later reader knows
+exactly which dylib, providers and CUDA files produced them:
+
+```python
+from embroider import runtime_info, save_runtime_info
+info = runtime_info()
+info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
+save_runtime_info("bench/run-001/runtime.json")
+```
+
+The venv scan follows `VIRTUAL_ENV` (unset = installs unknown, the
+probe fields still report); duplicate spellings of one venv
+(`Lib/` vs `lib/`) list once. Keys are stable
+(`ort_dylib`, `ort_dylib_exists`, `sibling_provider_dlls`,
+`cuda_usable`, `ort_installs`, `cuda_runtime_dlls`,
+`virtual_env`) — JSON today, trivially TOML-convertible.
+
 ### Explicit local files (air-gapped)
 
 `JinaV5.open_files(onnx_path, tokenizer_path, truncate_dim=512,

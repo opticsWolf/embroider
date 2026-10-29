@@ -3,6 +3,19 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.9.0] — 2026-10-29
+
+### Added
+- Runtime inventory: `embroider.runtime_info()` (Python dict) +
+  `save_runtime_info(path)` (pretty JSON) on top of a new
+  `diag::runtime_report`. Reports the loaded dylib
+  (`ORT_DYLIB_PATH` + existence), sibling provider DLLs, every
+  `onnxruntime*` install in the active venv, the CUDA/cuDNN DLLs
+  grouped by `nvidia/*` sub-library, and the CUDA-usability probe.
+  Venv-spelling duplicates list once (canonicalized). Covers the
+  harness need: save the exact machine layout next to bench numbers.
+  Rust: `diag::{runtime_report, save_runtime_report}`, 2 unit tests.
+
 ## [0.8.0] — 2026-10-29
 
 ### Added
