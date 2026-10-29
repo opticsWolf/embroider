@@ -68,50 +68,11 @@ decision lives there (§7.2), gated on okfgraph data.
 
 ## 3. Track B — typed decision (`src/decide.rs`)
 
-### B0. Artifact bakeoff (before any Rust)
-
-Contenders: **Laya English** (Jev-shaped Choice/Score/Noul natively, first-party
-`ONNXAgent` = proven ORT graph, community exports e.g.
-`inferenceprince/laya-onnx` as cross-check) vs **GLiClass-small-v1.0**
-(in-repo ONNX + int8, general classifier, labels-spliced input format to
-port). Record per contender: exact ONNX file + tokenizer path (Laya's live
-in per-checkpoint subfolders), opset, input-construction recipe (special
-tokens / question schema), parity vs torch runtime on a fixed state×question
-set (probabilities, abs tolerance), CPU latency, licence (both Apache-2.0).
-
-Decision rule: Laya if its ONNX graph loads on the 1.29 pin at parity —
-native typed questions are worth more than GLiClass's smaller size;
-GLiClass-small stays the fallback (144M, single-pass, proven in-repo ONNX).
-
-### B1. `Decider` (typed questions in, typed answers + probabilities out)
-
-```rust
-pub enum Question { Choice { instructions: String, criteria: Vec<(String, String)> },
-                    Score  { instructions: String, /* … */ },
-                    Noul   { instructions: String, /* … */ } }
-pub struct Decision { pub label: String, pub probabilities: Vec<(String, f32)>, /* … */ }
-```
-
-- `open` / `open_files` mirror the `Reranker` shape. `decide(state, &[Question])`
-  single-pass batches all questions for one state (the GLiClass/Laya
-  single-forward property — the whole point vs per-label NLI forwards);
-  `decide_batch(states, …)` for throughput.
-- Input construction (special tokens, label splicing) is **part of the
-  contract**: golden fixture pins token streams, not just outputs, so a
-  regression in prompt formatting fails loudly.
-- Probabilities returned native and unthresholded; abstention lives in the
-  consumer (thresholds re-fit per model — §0).
-- Golden fixture `fixtures/golden_decide_<model>.json`: fixed
-  state×question sets, expected labels + probability vectors, abs tolerance
-  1e-6 on probs, exact-match on labels.
-- PyO3 `PyDecider` + `cache_info` coverage via the task registry; env-gated
-  `tests/decide_e2e.rs`.
-
-### B2. Acceptance
-
-Same as A2, plus: per-question-type parity (Choice/Score/Noul each pinned);
-multilingual checkpoint (if adopted) gets per-language golden cases, not one
-aggregate — the vs-laya review flags weak slices hiding in averages.
+**Moved to `docs/typed-decision-plan.md`** (2026-10-29): the consolidated
+typed-decision record — verified contender repos (Laya export + GLiClass-small),
+`Decider` architecture, B0 bakeoff protocol (G0–G5), goldens, rejection log,
+and the reranker-learnings traceability table. Status: B0 in progress, no
+bytes downloaded yet.
 
 ## 4. Sequencing and releases
 
