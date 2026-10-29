@@ -1,7 +1,7 @@
 # Typed-decision plan (embroider)
 
-**Status:** B0 (artifact bakeoff) in progress — repos verified, no bytes
-downloaded yet. Supersedes Track B of
+**Status:** B0 executing — small-v1.0 G0–G3 done (see §8); Laya +
+v4-edge queued. Supersedes Track B of
 `docs/rerank-typed-decision-plan.md` (which keeps the registry record and
 the sequencing overview).
 
@@ -17,7 +17,7 @@ no torch anywhere in the chain, ONNX graph is the contract.
 design — the single-pass property is the whole point), threshold policy
 (consumer side, re-fit per model), training/fine-tuning.
 
-## 1. Contenders (verified 2026-10-29 via HF API, no downloads yet)
+## 1. Contenders (repos verified 2026-10-29 via HF API; small-v1.0 bytes downloaded + G0–G3 done, §8)
 
 ### 1a. Laya — native typed decisions (lead)
 
@@ -184,3 +184,42 @@ changes the moment the first one lands — flag, don't bury).
 | 8 | Plan-doc-only stays out of CHANGELOG | This doc ships no CHANGELOG entry |
 | 9 | Know when the analogy breaks | `decide_long` deferred (§2), not ported |
 | 10 | Licence re-check at adoption | §3 closing paragraph |
+
+## 8. B0 execution log — small-v1.0 (2026-10-29)
+
+Pinned revision `21edefaf` (verified via HF API). 575 MB `onnx/model.onnx`
++ tokenizer + config downloaded; torch side `gliclass` 0.1.21 sdist +
+torch 2.15 CPU + `trust_remote_code` for the parity reference.
+
+- **G0 cost: PASS.** ~10.5 ms/decision CPU (seq ~20, ORT 1.29, mean of
+  20) vs the ~2 ms/pair rerank spikes — same order of magnitude, 10x
+  under the Qwen3-kill line. Cold load 0.8 s (torch: 20.9 s — the
+  no-framework dividend, quantified).
+- **G1 graph: PASS.** opset 14 (safe on the 1.29 pin), 2497 nodes /
+  110 initializers, **zero** non-`ai.onnx` ops. 2 inputs
+  (`input_ids`, `attention_mask`, int64 [batch, seq]), 1 output
+  (`logits` float; symbolic shape `[position, batch]` resolves to
+  `[batch, classes]` at runtime). Self-contained, no external data.
+- **G2 parity: PASS, exact.** torch pipeline vs ORT on identical inputs
+  match to 3 decimals on all 8 probes (2 README + 6 discrimination ×
+  multi/single). The in-repo ONNX is faithful to the safetensors.
+  Recipe confirmed: `text + (<<LABEL>>label)* + <<SEP>>`
+  (`prompt_first=false`, `label_token_first=True`); special tokens
+  verified single-token (128001/128002), not OOV-split.
+- **G3 discrimination: SPLIT — the finding of the day.** Single-label
+  (softmax): 3/3 correct (sports 0.944, cooking 0.564, politics 0.998).
+  Multi-label (sigmoid): systematically over-confident — `quantum
+  physics` scores 1.0 on a football text, `knitting` ≥0.98 everywhere,
+  `weather` 0.999 on election news. Raw multi-label sigmoids are NOT
+  decision-ready; they need the repo's calibrator and/or re-fit
+  thresholds — exactly the consumer-policy split §0/§2 mandates. The
+  README's discriminating example does not reproduce at this revision
+  (vendor numbers are claims until reproduced — old plan §5, confirmed).
+- **G4 fp16: N/A** (export is fp32; the in-repo int8 enters the §4
+  precision sweep later). **G5 slices:** deferred to goldens (per-type
+  cases pinned there).
+- **Decision:** small-v1.0 proceeds to `decide.rs` — cheapest faithful
+  graph, seam-proving role fulfilled. Multi-label goes behind
+  calibration + thresholds (consumer side); single-label is shippable
+  native. Laya and v4-edge bakeoffs unchanged in queue.
+
