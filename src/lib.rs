@@ -24,6 +24,7 @@
 
 pub mod acquire;
 pub mod decide;
+pub mod decider2b;
 pub mod laya;
 pub mod diag;
 pub mod error;
@@ -44,6 +45,7 @@ pub use acquire::{
     NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
     RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
 };
+pub use acquire::{DECIDER2B_MODEL};
 pub use diag::{configure_runtime, report, runtime_report, runtime_report_for, save_runtime_report, OrtReport};
 pub use jina::{JinaV5, TokenizerHandle, MAX_LENGTH, MODEL_MAX_TOKENS, NATIVE_DIM};
 pub use rerank::{
@@ -51,6 +53,9 @@ pub use rerank::{
 };
 pub use decide::{
     Decider, Decision, Question, DECIDE_ABSOLUTE_MAX, DECIDE_DEFAULT_MAX,
+};
+pub use decider2b::{
+    Decider2B, Decider2BDecision, Decider2BOption, Decider2BQuestion,
 };
 pub use laya::{LayaDecider, LayaDecision, LayaLongDecision, LayaOption, LayaQuestion, LayaTemperatures, BinningMap};
 pub use vision::{
@@ -738,6 +743,215 @@ impl PyLayaDecider {
     }
 }
 
+/// Parse one decider-2b question from its Python tuple shape:
+/// - `("choice", instructions, options)` where each option is a
+///   `label` string or a `(label, description|None)` pair.
+/// - `("score", instructions, [levels...])`.
+/// - `("noul", instructions, true_criterion, false_criterion)` — the
+///   false side defaults to `""` (bare `no`) when omitted; unlike
+///   Laya's 3-tuple noul, both criteria ride along.
+#[cfg(feature = "extension-module")]
+fn parse_decider2b_question(obj: &Bound<'_, PyAny>) -> PyResult<Decider2BQuestion> {
+    let tup = obj
+        .cast::<PyTuple>()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("a decider-2b question is a tuple (see Decider2B.decide)"))?;
+    let kind: String = tup
+        .get_item(0)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("a decider-2b question needs (kind, instructions, ...)"))?
+        .extract()?;
+    let instructions: String = tup
+        .get_item(1)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("a decider-2b question needs (kind, instructions, ...)"))?
+        .extract()?;
+    match kind.as_str() {
+        "choice" => {
+            let opts_obj = tup
+                .get_item(2)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("choice needs an options list"))?;
+            let opts = opts_obj
+                .cast::<PyList>()
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("choice needs an options list"))?;
+            let mut options = Vec::with_capacity(opts.len());
+            for o in opts.iter() {
+                if let Ok(label) = o.extract::<String>() {
+                    options.push(Decider2BOption { label, description: None });
+                } else if let Ok(pair) = o.cast::<PyTuple>() {
+                    let label: String = pair
+                        .get_item(0)
+                        .map_err(|_| pyo3::exceptions::PyValueError::new_err("an option pair is (label, description|None)"))?
+                        .extract()?;
+                    let desc: Option<String> = pair
+                        .get_item(1)
+                        .map_err(|_| pyo3::exceptions::PyValueError::new_err("an option pair is (label, description|None)"))?
+                        .extract()?;
+                    options.push(Decider2BOption { label, description: desc });
+                } else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "a choice option is a label string or a (label, description|None) pair",
+                    ));
+                }
+            }
+            Ok(Decider2BQuestion::Choice { instructions, options })
+        }
+        "score" => {
+            let levels: Vec<String> = tup
+                .get_item(2)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("score needs a levels list"))?
+                .extract()?;
+            Ok(Decider2BQuestion::Score { instructions, levels })
+        }
+        "noul" => {
+            let true_criterion: String = tup
+                .get_item(2)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("noul needs (instructions, true_criterion[, false_criterion])"))?
+                .extract()?;
+            let false_criterion: String = tup
+                .get_item(3)
+                .ok()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+            Ok(Decider2BQuestion::Noul { instructions, true_criterion, false_criterion })
+        }
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "decider-2b question kind must be 'choice', 'score' or 'noul', got '{other}'"
+        ))),
+    }
+}
+
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "Decider2B")]
+struct PyDecider2B {
+    inner: Decider2B,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyDecider2B {
+    #[staticmethod]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, device="auto", max_length=None, precision=None, cpu_arena=false))]
+    fn open(
+        model_id: &str,
+        revision: Option<String>,
+        cache_dir: Option<String>,
+        device: &str,
+        max_length: Option<usize>,
+        precision: Option<&str>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
+        let inner = Decider2B::open(
+            model_id,
+            revision.as_deref(),
+            cache_dir.map(PathBuf::from),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            precision,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (onnx_path, tokenizer_path, decision_path, calibration_path, device="auto", max_length=None, cpu_arena=false))]
+    fn open_files(
+        onnx_path: &str,
+        tokenizer_path: &str,
+        decision_path: &str,
+        calibration_path: &str,
+        device: &str,
+        max_length: Option<usize>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let inner = Decider2B::open_files(
+            std::path::Path::new(onnx_path),
+            std::path::Path::new(tokenizer_path),
+            std::path::Path::new(decision_path),
+            std::path::Path::new(calibration_path),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    /// Answer questions over one state: `questions` is a list of
+    /// decider-2b question tuples — `("choice", ins, options[, order])`,
+    /// `("score", ins, levels)`,
+    /// `("noul", ins, true_criterion[, false_criterion])` — where a
+    /// choice option is a label string or a `(label, description|None)`
+    /// pair. Returns `[(label, [(option, prob), ...], value|None,
+    /// confidence, answer_confidence), ...]` in question order — one
+    /// row-batched session run per batch.
+    #[pyo3(signature = (state, questions))]
+    fn decide(
+        &self,
+        py: Python<'_>,
+        state: &str,
+        questions: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<Vec<(String, Vec<(String, f32)>, Option<f32>, f32, f32)>> {
+        let mut qs = Vec::with_capacity(questions.len());
+        for q in &questions {
+            qs.push(parse_decider2b_question(q)?);
+        }
+        py.detach(|| {
+            let ds = self
+                .inner
+                .decide(state, &qs)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+            Ok(ds
+                .into_iter()
+                .map(|d| {
+                    (
+                        d.label,
+                        d.probabilities,
+                        d.value,
+                        d.confidence,
+                        d.answer_confidence,
+                    )
+                })
+                .collect())
+        })
+    }
+
+    fn count_tokens(&self, text: &str) -> PyResult<usize> {
+        self.inner
+            .count_tokens(text)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+    }
+
+    /// Checkpoint temperatures after the [0.05, 5.0] clamp: the
+    /// (choice, score, noul) triple plus the load-time rejection list.
+    fn temperature_report(&self) -> (Vec<f64>, Vec<String>) {
+        (
+            self.inner.temperatures().to_vec(),
+            self.inner.temperature_rejections().to_vec(),
+        )
+    }
+
+    #[getter]
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    #[getter]
+    fn used_cuda(&self) -> bool {
+        self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn max_length(&self) -> usize {
+        self.inner.max_len()
+    }
+}
+
 #[cfg(feature = "extension-module")]
 #[pyclass(name = "JinaV5Vision")]
 struct PyJinaV5Vision {
@@ -1114,6 +1328,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyReranker>()?;
     m.add_class::<PyDecider>()?;
     m.add_class::<PyLayaDecider>()?;
+    m.add_class::<PyDecider2B>()?;
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;

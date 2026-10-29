@@ -3,6 +3,40 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.10.0] — 2026-10-29
+
+### Added
+- Decider-2B slot-layout serving: `Decider2B` (Rust `src/decider2b.rs`
+  + Python `embroider.Decider2B`) for the `Mapika/decider-2b`
+  checkpoint from the `opticsWolf/decider-2b-fp32-onnx` self-export
+  (7.6MB weightless graph + 3.76GB vendored safetensors + tokenizer
+  + `decision.json` + `calibration.json`, all from the artifact repo).
+  One row per question (`Context:` + state, lettered options, the
+  `Answer: (` slot scored over 255 label ids; isolated yes/no rows
+  for score; `slot_pos` rows batched ort_rows-style, no attention
+  mask), per-qtype temperatures from `calibration.json` clamped to
+  the checkpoint's own `[0.05, 5.0]` range (the fitted noul temp IS
+  0.05 — a Laya-style 0.5 floor would corrupt it). New `TaskKind::
+  Decide2B` (`decide-2b` in `available_models`); `Decider::open` and
+  `LayaDecider::open` refuse the id with a pointer, and vice versa.
+  Laya's question triple is mirrored but noul carries BOTH criteria
+  (`true`/`false` descriptions — every S1MB noul ships both, and the
+  reference layout has no `option_order`, so neither does this port:
+  callers permute the options vec themselves).
+- CUDA runs the parallel executor (`SessionPolicy::decider2b`, default
+  thread pools): the sequential memory planner aliases a shape buffer
+  on this graph (ORT #4829 class — a chunk-scan Reshape reads a
+  zeroed/garbage dim and the run fails on the first batch), while the
+  C-level `enable_mem_reuse=false` that fixes it is not reachable
+  from the C API and the `session.enable_mem_reuse` config key is not
+  honored (all probed; gossamer-sourced). An explicit
+  `inter_op_num_threads=1` re-triggers the corruption under the
+  parallel executor, so the policy sets no thread counts. 8 unit
+  tests; reference-built goldens (`fixtures/golden_decider2b.json`,
+  8 cases incl. the 12-option wide path + a mixed multi-question
+  batch) with exact-id construction pins; CPU + CUDA e2e at 5e-4
+  (`tests/decider2b_e2e.rs`, the CUDA leg gates the executor switch).
+
 ## [0.9.0] — 2026-10-29
 
 ### Added

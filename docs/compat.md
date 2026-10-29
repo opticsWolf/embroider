@@ -92,6 +92,25 @@ Rules:
   abs 1e-6 on every number). `TaskKind::DecideLaya` (`decide-laya`)
   keeps the routing unambiguous; `cache_info` requires
   `rl_agent_config.json` for it.
+- **Decider-2B slot layout (0.10.0)**: `Decider2B` (`src/decider2b.rs`,
+  Python `embroider.Decider2B`) serving `Mapika/decider-2b` (Qwen3.5-2B
+  decoder + slot head) from the `opticsWolf/decider-2b-fp32-onnx`
+  self-export (7.6MB graph + 3.76GB vendored safetensors + tokenizer +
+  `decision.json` + `calibration.json`). One row per question
+  (`Context:` + state, lettered/wide options, the `Answer: (` slot
+  scored over 255 label ids; isolated yes/no rows for score), 2
+  inputs (`input_ids`, `slot_pos`), no attention mask, ort_rows-style
+  batching. Own question enum mirroring Laya's except noul, which
+  carries BOTH criteria (no `option_order` — the reference layout has
+  none). Checkpoint temperatures clamped to its own [0.05, 5.0]
+  (fitted noul temp is 0.05). CUDA runs the parallel executor with
+  default thread pools (sequential planner aliases a shape buffer —
+  ORT #4829 class; `enable_mem_reuse=false` unreachable from C;
+  `inter_op=1` re-triggers it — all probed, gossamer-sourced).
+  Goldens `fixtures/golden_decider2b.json` (8 cases incl. the wide
+  path + mixed batch) + ignored `tests/decider2b_e2e.rs` (exact ids,
+  5e-4 CPU *and* CUDA). `TaskKind::Decide2B` (`decide-2b`);
+  `cache_info` requires both configs for it.
 - **Task registry (0.3.4)**: `acquire::{TaskSpec, TaskKind, builtin_tasks,
   lookup_task, artifact_for_task}` — the non-embedding sibling of
   `ModelSpec` (no `native_dim`/`ladder`; scores and decisions have no
@@ -126,6 +145,7 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `convaiinnovations/laya-typed-decisions` fp32 | `opticsWolf/laya-typed-decisions-fp32-onnx` (`laya-td-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, marker layout, fitted temps; self-export of `1a793eb`, torch Δ 2.0e-6; agent-row goldens at 1e-6, billing vector unit-pinned) |
 | `convaiinnovations/laya` fp32 | `opticsWolf/laya-english-fp32-onnx` (`laya-base-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, base English 512/192; near-chance zero-shot per Ollaya — faithful export, not classifier duty) |
 | `convaiinnovations/laya-multilingual` fp32 | `opticsWolf/laya-multilingual-fp32-onnx` (`laya-multi-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, multilingual mmBERT-base 1024/256; fastest CPU of the three) |
+| `Mapika/decider-2b` fp32 | `opticsWolf/decider-2b-fp32-onnx` (`model.onnx` + `model.safetensors` + `decision.json` + `calibration.json`) | Apache-2.0 (decide-2b, slot layout, 32k ctx; self-export of `7614a6c7`, torch Δ 1e-4; reference-row goldens at 5e-4 CPU+CUDA) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence
@@ -154,6 +174,7 @@ it appears, never a CPU upgrade.
 | `laya-typed-decisions` | 1.70 GB (fp16: 846 MB) | 65 ms / 225 ms per 4-row batch — **slow-tier** | **~15 ms/batch** (fp16: 10–23 ms) |
 | `laya` (base English) | 1.70 GB (fp16: 846 MB) | ~220 ms — not classifier duty (near-chance zero-shot per Ollaya) | ~15 ms |
 | `laya-multilingual` | 1.32 GB (fp16: 678 MB) | **~97 ms, fastest Laya on CPU** | **~10 ms** |
+| `decider-2b` | 3.76 GB (graph 7.6 MB) | 1.5–2 s/row — **slow-tier, CUDA duty** | **~75–90 ms/row** (parallel executor) |
 | `jina-embeddings-v5-text-small` | 2.40 GB (fp16: 1.20 GB) | ms-scale, CPU-native | — |
 | `jina-embeddings-v5-text-nano` | 866 MB (fp16: 425 MB, int8: 247 MB) | ms-scale, CPU-native | — |
 | `jina-v5-omni-nano` (vision) | 1.25 GB (fp16: 623 MB) | slow | fp16 CUDA |
@@ -171,8 +192,9 @@ Consumer shapes that follow from the table:
   halve download and VRAM. GLiClass stays fp32 until its own parity
   gate is wired.
 - **Not served**: int8 on any decision model (rejected — the −1e4 mask
-  sentinel is unquantizable, drift 2.8–9997); Mapika/decider-2b (no
-  registry entry, Ollaya-side if ever).
+  sentinel is unquantizable, drift 2.8–9997); fp16 decider-2b (no
+  precision story — the export is fp32-only until its own parity
+  gate is wired).
 - **New registry entries** record the artifact's licence in this table in
   the same change. A model whose licence forbids redistributing adapted
   weights is referenced by upstream repo only, never mirrored.

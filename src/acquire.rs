@@ -164,6 +164,10 @@ pub enum TaskKind {
     /// `Decide`, different input contract (marker positions, not label
     /// text) — served by `LayaDecider`, refused by `Decider`.
     DecideLaya,
+    /// Slot-layout typed decisions (decider-2b): same question shapes as
+    /// `Decide`, decoder input contract (`input_ids` + `slot_pos`, no
+    /// attention mask) — served by `Decider2B`, refused by `Decider`.
+    Decide2B,
 }
 
 impl TaskKind {
@@ -172,6 +176,7 @@ impl TaskKind {
             TaskKind::Rerank => "rerank",
             TaskKind::Decide => "decide",
             TaskKind::DecideLaya => "decide-laya",
+            TaskKind::Decide2B => "decide-2b",
         }
     }
 }
@@ -288,6 +293,13 @@ pub const LAYA_MULTI_MODEL: &str = "convaiinnovations/laya-multilingual";
 /// Traced sequence bound all three Laya exports bake in (dynamicDims
 /// seq≤1024): explicit `max_length` can never exceed it.
 pub const LAYA_ABSOLUTE_MAX: usize = 1024;
+/// Upstream id: Mapika's Qwen3.5-2B decoder with the slot_logits head
+/// (decider-ai 1.10.0, v12 @ `7614a6c7`). Served by `Decider2B`
+/// (`src/decider2b.rs`): the 7.6MB graph plus the 3.76GB vendored
+/// safetensors, constructed Ollaya-side from the torch checkpoint
+/// (dynamo structurally hung). fp32 only — no precision story exists
+/// for this export.
+pub const DECIDER2B_MODEL: &str = "Mapika/decider-2b";
 /// `open_files` default ceiling (registry ids resolve their own).
 pub const LAYA_DEFAULT_MAX: usize = 1024;
 
@@ -333,6 +345,32 @@ pub const LAYA_MULTI: TaskSpec = TaskSpec {
     int8: None,
 };
 
+/// Slot-layout typed decisions (plan `docs/typed-decision-plan.md` §10):
+/// decider-2b, Qwen3.5-2B decoder + slot head, 32k context. Two inputs
+/// (`input_ids`, `slot_pos`), one output (`label_logits` [rows, 255]);
+/// no attention mask (causal; right padding never reaches earlier
+/// positions). The `slot_pos` rows plus per-qtype temperatures in
+/// `decision.json`/`calibration.json` are the contract — `open()`
+/// fetches both sidecars alongside the graph + vendored safetensors +
+/// tokenizer. fp32 only (no precision story); CUDA sessions run the
+/// parallel executor (the sequential planner aliases a shape buffer on
+/// this graph — ORT #4829 class — corrupting a chunk-scan Reshape;
+/// `enable_mem_reuse=false` is not reachable from the C API, parallel
+/// execution is the sanctioned equivalent, parity-pinned in e2e).
+pub const DECIDER2B: TaskSpec = TaskSpec {
+    id: DECIDER2B_MODEL,
+    kind: TaskKind::Decide2B,
+    max_tokens: 32768,
+    prompt_first: false,
+    fp32: Artifact {
+        repo: "opticsWolf/decider-2b-fp32-onnx",
+        file: "model.onnx",
+        sidecar: Some("model.safetensors"),
+    },
+    fp16: None,
+    int8: None,
+};
+
 /// Builtin task registry. Adding entries never moves existing graphs —
 /// different models, different outputs, no shared vector space.
 pub fn builtin_tasks() -> &'static [TaskSpec] {
@@ -344,6 +382,7 @@ pub fn builtin_tasks() -> &'static [TaskSpec] {
         LAYA_TD,
         LAYA_BASE,
         LAYA_MULTI,
+        DECIDER2B,
     ]
 }
 
@@ -582,6 +621,13 @@ pub fn cache_info(
     // the config; LayaDecider refuses to open without it.
     if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::DecideLaya) {
         files.push(("rl_agent_config.json", true));
+    }
+    // Slot-layout checkpoint: the slot rows, label alphabet and
+    // per-qtype temperatures live in decision.json + calibration.json;
+    // Decider2B refuses to open without them.
+    if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::Decide2B) {
+        files.push(("decision.json", true));
+        files.push(("calibration.json", true));
     }
     let mut rep = cache_info_files(artifact.repo, &files, revision, cache_dir)?;
     // The generic core echoes the repo; the registry surface reports the

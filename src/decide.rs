@@ -207,6 +207,13 @@ impl Decider {
                 "'{model_id}' is a marker-layout Laya checkpoint, served by LayaDecider — Decider serves the GLiClass-layout tasks only"
             ));
         }
+        // Slot-layout checkpoint, same story: the 2-input GLiClass path
+        // cannot feed (input_ids, slot_pos).
+        if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::Decide2B) {
+            return Err(anyhow!(
+                "'{model_id}' is a slot-layout decider-2b checkpoint, served by Decider2B — Decider serves the GLiClass-layout tasks only"
+            ));
+        }
         let ceiling =
             lookup_task(model_id).map(|s| s.max_tokens).unwrap_or(DECIDE_DEFAULT_MAX);
         let max_length = check_decide_limit_for(max_length, ceiling)?;

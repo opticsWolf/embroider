@@ -32,12 +32,16 @@ impl DeviceReq {
 }
 
 /// Explicit per-workload session tuning. `None` fields leave the ORT
-/// default in place.
+/// default in place. `parallel` selects the parallel executor
+/// (`SetSessionExecutionMode(ORT_PARALLEL)`) instead of the default
+/// sequential one — per-model, not global: only the workload whose
+/// graph needs it pays the scheduling change.
 #[derive(Clone, Copy, Debug)]
 pub struct SessionPolicy {
     pub opt_level: Option<GraphOptimizationLevel>,
     pub intra_threads: Option<usize>,
     pub inter_threads: Option<usize>,
+    pub parallel: bool,
 }
 
 impl SessionPolicy {
@@ -56,6 +60,26 @@ impl SessionPolicy {
     /// can diverge without touching embedding or rerank sessions.
     pub fn decide_pair() -> Self {
         Self::text_embed()
+    }
+
+    /// Measured policy for decider-2b (slot-layout decision) sessions:
+    /// Level3 + the parallel executor, DEFAULT thread pools. The
+    /// sequential planner aliases a shape buffer on this graph (ORT
+    /// #4829 class — a chunk-scan Reshape reads a zeroed dim and the
+    /// run fails), and the C-level `enable_mem_reuse=false` that fixes
+    /// it is not reachable from the C API. Parallel execution is the
+    /// sanctioned equivalent — BUT only with default pools: an explicit
+    /// `inter_op_num_threads=1` re-triggers the corruption under the
+    /// parallel executor (probed: inter=1 fails, inter=default matches
+    /// on identical rows), so this policy sets no thread counts. Both
+    /// devices are e2e-pinned; do not retune without re-running parity.
+    pub fn decider2b() -> Self {
+        Self {
+            opt_level: Some(ort::session::builder::GraphOptimizationLevel::Level3),
+            intra_threads: None,
+            inter_threads: None,
+            parallel: true,
+        }
     }
 
     /// Measured policy for Laya (marker-layout decision) sessions. Same
@@ -77,12 +101,13 @@ impl SessionPolicy {
             opt_level: Some(ort::session::builder::GraphOptimizationLevel::Level3),
             intra_threads: Some(std::cmp::max(1, threads / 2)), // physical cores over logical
             inter_threads: Some(1),
+            parallel: false,
         }
     }
 
     /// ORT defaults — for consumers that never tuned their sessions.
     pub fn ort_defaults() -> Self {
-        Self { opt_level: None, intra_threads: None, inter_threads: None }
+        Self { opt_level: None, intra_threads: None, inter_threads: None, parallel: false }
     }
 
     /// Apply this policy to a session builder. `None` fields leave the
@@ -92,6 +117,9 @@ impl SessionPolicy {
     pub fn apply(&self, mut builder: SessionBuilder) -> Result<SessionBuilder> {
         if let Some(level) = self.opt_level {
             builder = oe(builder.with_optimization_level(level))?;
+        }
+        if self.parallel {
+            builder = oe(builder.with_parallel_execution(true))?;
         }
         if let Some(n) = self.intra_threads {
             builder = oe(builder.with_intra_threads(n))?;

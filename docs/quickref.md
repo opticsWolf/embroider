@@ -166,6 +166,21 @@ d.predict_long(long_doc, [("noul", "Does it answer Q?", "passage holds the answe
 d.load_binning_map("calibration.json")   # fitted overlay only; nothing shipped
 ```
 
+## Decider-2B (Python)
+
+```python
+from embroider import Decider2B
+
+d = Decider2B.open("Mapika/decider-2b")   # slot layout, 32k ctx, fp32; CUDA = parallel executor
+d.decide("My card was charged twice.", [
+    ("choice", "Which department?", [("billing", "invoices and payments"), ("sales", None)]),
+    ("noul", "Does this need a refund?", "yes", "no"),   # BOTH criteria (unlike Laya)
+    ("score", "How urgent?", ["low", "medium", "high"]),
+])
+# -> [(label, probs, value|None, confidence, answer_confidence), ...]  (no act head)
+d.temperature_report()   # ([2.465, 1.0, 0.05], clamp rejections) — [0.05, 5.0] range
+```
+
 Sequence cap: `max_length` (default 512, the model ceiling); truncation is
 truncate-state-side-first — the options are the question and are never cut
 to fit the state, and options that alone fill the cap raise instead of

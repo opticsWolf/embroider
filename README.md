@@ -20,6 +20,7 @@
 - [Text embeddings](#text-embeddings)
 - [Vision embeddings](#vision-embeddings)
 - [Rerank](#rerank) — cross-encoder pair scoring (`Reranker`, 0.4.x)
+- [Decide](#decide) — typed decisions (`Decider`, 0.5.x) · [Laya](#laya) — marker layout (`LayaDecider`, 0.7.x) · [Decider-2B](#decider-2b) — slot layout (`Decider2B`, 0.10.x)
 - [Running without downloads](#running-without-downloads) — tokenizer counts, offline cache checks, local files
 - [Session/threading policy](#sessionthreading-policy-measured)
 - [Failure policy](#failure-policy) · [Contract notes](#contract-notes) · [Conformance](#conformance) · [Testing](#testing)
@@ -76,6 +77,8 @@ Apache-2.0, the registry's first commercially-usable weights:
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` | itself (`onnx/model.onnx`) | fp32 | Rerank, English |
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | itself (`onnx/model.onnx`) | fp32 | Rerank, multilingual (100+ langs) |
 | `knowledgator/gliclass-small-v1.0` | itself (`onnx/model.onnx`) | fp32 | Typed decisions (Choice/Score), 144M |
+| `knowledgator/gliclass-v4-edge` | itself (`onnx/model.onnx`) | fp32 | Typed decisions + instruction prompts, labels-first, 440M |
+| `convaiinnovations/laya-typed-decisions` | `opticsWolf/laya-typed-decisions-fp32-onnx` | fp32 | Typed decisions, marker layout, fitted temps |
 
 ### Custom models
 
@@ -109,13 +112,14 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 |---|---|
 | `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application (`apply_providers` = arena on; `apply_providers_with_arena` carries the flag) |
 | `probe` | corrected CUDA availability check (`OnceLock`-cached) |
-| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`/`int8`) + explicit `SessionPolicy` (`text_embed()`, `rerank_pair()`, `ort_defaults()`) |
+| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`/`int8`) + explicit `SessionPolicy` (`text_embed()`, `rerank_pair()`, `decide_pair()`, `laya()`, `decider2b()`, `ort_defaults()`) |
 | `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`), embedding registry (`ModelSpec`) + task registry (`TaskSpec`: rerank/decide) |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
 | `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
 | `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
 | `rerank` | `Reranker` — the cross-encoder scoring contract (pair seam + `score_long` windowing) |
 | `decide` | `Decider` — the typed-decision contract (`Choice`/`Score` questions, truncate-state-side-first) |
+| `decider2b` | `Decider2B` — the slot-layout contract (Qwen3.5-2B decoder, `input_ids` + `slot_pos`, 32k ctx, parallel executor on CUDA) |
 
 The default (pure-Rust) build is Python-free — no `pyo3` in downstream
 trees; the `extension-module` Cargo feature gates the PyO3 bindings and is
@@ -349,6 +353,38 @@ probes) with the ignored `tests/laya_e2e.rs` asserting exact input-id
 + marker equality and 1e-6 on every number. Deliberately not ported:
 `predict_long` scans (caller windows + aggregates), `binning_map`
 (no checkpoint ships one), `lang_temperatures`, hooks/serve.
+
+## Decider-2B
+
+Slot-layout typed decisions: `Decider2B.open(model_id, ...)` serves
+the `Mapika/decider-2b` checkpoint (Qwen3.5-2B decoder + slot head)
+from the `opticsWolf/decider-2b-fp32-onnx` self-export — 7.6MB
+weightless graph + 3.76GB vendored safetensors + tokenizer +
+`decision.json` + `calibration.json`, all fetched from the artifact
+repo (`open_files(onnx, tokenizer, decision, calibration, ...)` takes
+explicit files; both configs are required, never optional). One row
+per question: `Context:` + state, then options with lettered choices
+(`(A) …`, one label token each past 10 options) and a trailing
+`Answer: (` whose slot is scored over the 255 label ids; score
+questions become one yes/no row per level (isolated fit). Two inputs
+(`input_ids`, `slot_pos`, no attention mask — causal, right padding
+trails the slot), one output (`label_logits`). Temperatures are the
+checkpoint's own `(choice, score, noul)` triple from
+`calibration.json` clamped to its `[0.05, 5.0]` range — the fitted
+noul temp IS 0.05, so a Laya-style 0.5 floor would corrupt it.
+Questions mirror `LayaQuestion` except noul, which carries BOTH
+criteria (`("noul", ins, true_criterion[, false_criterion])` —
+rendered `yes: …` / `no: …`; the reference layout has no
+`option_order`, so neither does this port). CUDA runs the parallel
+executor with default thread pools: the sequential planner aliases a
+shape buffer on this graph (ORT #4829 class — a chunk-scan Reshape
+reads a zeroed dim and fails on the first batch), the C-level
+`enable_mem_reuse=false` is unreachable from the C API, and an
+explicit `inter_op_num_threads=1` re-triggers it — all probed.
+`fixtures/golden_decider2b.json` (8 cases incl. the 12-option wide
+path + a mixed multi batch) pins exact input ids and 5e-4 answers on
+CPU *and* CUDA (`tests/decider2b_e2e.rs` — the CUDA leg gates the
+executor switch). 32k context, fp32 only, CPU slow-tier (~1.5–2 s/row).
 
 ## Running without downloads
 

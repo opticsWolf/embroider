@@ -1,0 +1,1340 @@
+{
+ "temps": [
+  2.465,
+  1.0,
+  0.05
+ ],
+ "cases": [
+  {
+   "key": "billing_choice",
+   "kind": "choice",
+   "state": "My card was charged twice for the same purchase.",
+   "spec": {
+    "key": "billing_choice",
+    "kind": "choice",
+    "state": "My card was charged twice for the same purchase.",
+    "instructions": "Which department should handle this?",
+    "options": [
+     [
+      "billing",
+      "invoices, charges and payments"
+     ],
+     [
+      "technical support",
+      "login, errors and crashes"
+     ],
+     [
+      "sales",
+      "plans, upgrades and quotes"
+     ]
+    ]
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4888,
+      3575,
+      557,
+      11102,
+      10598,
+      364,
+      279,
+      1788,
+      7384,
+      13,
+      271,
+      14162,
+      25,
+      15451,
+      9016,
+      1220,
+      3579,
+      411,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      32419,
+      25,
+      61893,
+      11,
+      9892,
+      321,
+      13767,
+      198,
+      5181,
+      8,
+      10597,
+      1761,
+      25,
+      5677,
+      11,
+      5787,
+      321,
+      34942,
+      198,
+      2929,
+      8,
+      6416,
+      25,
+      6440,
+      11,
+      30575,
+      321,
+      16687,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 59,
+     "k": 3
+    }
+   ],
+   "answers": [
+    {
+     "label": "billing",
+     "probs": [
+      [
+       "billing",
+       0.9628138862029162
+      ],
+      [
+       "technical support",
+       0.020160557419368192
+      ],
+      [
+       "sales",
+       0.017025556377715665
+      ]
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "key": "sport_choice",
+   "kind": "choice",
+   "state": "The football match ended 2-1 after extra time.",
+   "spec": {
+    "key": "sport_choice",
+    "kind": "choice",
+    "state": "The football match ended 2-1 after extra time.",
+    "instructions": "Decide the topic.",
+    "options": [
+     [
+      "sports",
+      null
+     ],
+     [
+      "cooking",
+      null
+     ]
+    ]
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      760,
+      8693,
+      2353,
+      9202,
+      220,
+      17,
+      12,
+      16,
+      1238,
+      4799,
+      854,
+      13,
+      271,
+      14162,
+      25,
+      95462,
+      279,
+      8282,
+      13,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      9541,
+      198,
+      5181,
+      8,
+      16725,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 36,
+     "k": 2
+    }
+   ],
+   "answers": [
+    {
+     "label": "sports",
+     "probs": [
+      [
+       "sports",
+       0.989632979100014
+      ],
+      [
+       "cooking",
+       0.01036702089998604
+      ]
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "key": "sentiment_score",
+   "kind": "score",
+   "state": "I love this product, it works perfectly.",
+   "spec": {
+    "key": "sentiment_score",
+    "kind": "score",
+    "state": "I love this product, it works perfectly.",
+    "instructions": "Rate the sentiment from negative to positive.",
+    "levels": [
+     "negative",
+     "neutral",
+     "positive"
+    ]
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      40,
+      2854,
+      411,
+      1918,
+      11,
+      424,
+      4138,
+      13542,
+      13,
+      271,
+      14162,
+      25,
+      19172,
+      279,
+      25144,
+      494,
+      7968,
+      310,
+      6572,
+      13,
+      198,
+      1941,
+      18988,
+      4087,
+      25,
+      7968,
+      198,
+      20810,
+      279,
+      10660,
+      4087,
+      4786,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 50,
+     "k": 2
+    },
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      40,
+      2854,
+      411,
+      1918,
+      11,
+      424,
+      4138,
+      13542,
+      13,
+      271,
+      14162,
+      25,
+      19172,
+      279,
+      25144,
+      494,
+      7968,
+      310,
+      6572,
+      13,
+      198,
+      1941,
+      18988,
+      4087,
+      25,
+      20002,
+      198,
+      20810,
+      279,
+      10660,
+      4087,
+      4786,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 50,
+     "k": 2
+    },
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      40,
+      2854,
+      411,
+      1918,
+      11,
+      424,
+      4138,
+      13542,
+      13,
+      271,
+      14162,
+      25,
+      19172,
+      279,
+      25144,
+      494,
+      7968,
+      310,
+      6572,
+      13,
+      198,
+      1941,
+      18988,
+      4087,
+      25,
+      6572,
+      198,
+      20810,
+      279,
+      10660,
+      4087,
+      4786,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 50,
+     "k": 2
+    }
+   ],
+   "answers": [
+    {
+     "label": "positive",
+     "probs": [
+      [
+       "negative",
+       0.05859703015874767
+      ],
+      [
+       "neutral",
+       0.09145448988409474
+      ],
+      [
+       "positive",
+       0.8499484799571576
+      ]
+     ],
+     "value": 1.79135144979841
+    }
+   ]
+  },
+  {
+   "key": "relevance_true",
+   "kind": "noul",
+   "state": "Hold the reset button for 10 seconds to restore factory settings, then set a new password.",
+   "spec": {
+    "key": "relevance_true",
+    "kind": "noul",
+    "state": "Hold the reset button for 10 seconds to restore factory settings, then set a new password.",
+    "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+    "true_criterion": "The passage answers the query.",
+    "false_criterion": "The passage does not answer the query."
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      45847,
+      279,
+      7345,
+      3037,
+      364,
+      220,
+      16,
+      15,
+      6283,
+      310,
+      14519,
+      8369,
+      4842,
+      11,
+      1179,
+      716,
+      264,
+      491,
+      3435,
+      13,
+      271,
+      14162,
+      25,
+      12193,
+      279,
+      20438,
+      4087,
+      279,
+      3134,
+      25,
+      2500,
+      635,
+      353,
+      7345,
+      264,
+      23772,
+      8997,
+      3435,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      25,
+      561,
+      20438,
+      1503,
+      524,
+      4087,
+      279,
+      3134,
+      13,
+      198,
+      5181,
+      8,
+      9542,
+      25,
+      561,
+      20438,
+      10926,
+      279,
+      3134,
+      13,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 72,
+     "k": 2
+    }
+   ],
+   "answers": [
+    {
+     "label": "false",
+     "probs": [
+      [
+       "false",
+       0.9999918432118319
+      ],
+      [
+       "true",
+       8.156788168074849e-06
+      ]
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "key": "relevance_false",
+   "kind": "noul",
+   "state": "Preheat the oven to 200 degrees and fold the dough gently.",
+   "spec": {
+    "key": "relevance_false",
+    "kind": "noul",
+    "state": "Preheat the oven to 200 degrees and fold the dough gently.",
+    "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+    "true_criterion": "The passage answers the query.",
+    "false_criterion": "The passage does not answer the query."
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4551,
+      19354,
+      279,
+      22660,
+      310,
+      220,
+      17,
+      15,
+      15,
+      11995,
+      321,
+      11223,
+      279,
+      29363,
+      28314,
+      13,
+      271,
+      14162,
+      25,
+      12193,
+      279,
+      20438,
+      4087,
+      279,
+      3134,
+      25,
+      2500,
+      635,
+      353,
+      7345,
+      264,
+      23772,
+      8997,
+      3435,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      25,
+      561,
+      20438,
+      1503,
+      524,
+      4087,
+      279,
+      3134,
+      13,
+      198,
+      5181,
+      8,
+      9542,
+      25,
+      561,
+      20438,
+      10926,
+      279,
+      3134,
+      13,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 68,
+     "k": 2
+    }
+   ],
+   "answers": [
+    {
+     "label": "false",
+     "probs": [
+      [
+       "false",
+       1.0
+      ],
+      [
+       "true",
+       3.0967093589555536e-91
+      ]
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "key": "topic_choice",
+   "kind": "choice",
+   "state": "The election results will be announced at midnight.",
+   "spec": {
+    "key": "topic_choice",
+    "kind": "choice",
+    "state": "The election results will be announced at midnight.",
+    "instructions": "Decide the topic.",
+    "options": [
+     [
+      "sports",
+      null
+     ],
+     [
+      "politics",
+      null
+     ],
+     [
+      "weather",
+      null
+     ]
+    ]
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      760,
+      6028,
+      2961,
+      668,
+      381,
+      7002,
+      506,
+      31266,
+      13,
+      271,
+      14162,
+      25,
+      95462,
+      279,
+      8282,
+      13,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      9541,
+      198,
+      5181,
+      8,
+      11169,
+      198,
+      2929,
+      8,
+      8831,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 37,
+     "k": 3
+    }
+   ],
+   "answers": [
+    {
+     "label": "politics",
+     "probs": [
+      [
+       "sports",
+       0.01994170347101084
+      ],
+      [
+       "politics",
+       0.9655744498613453
+      ],
+      [
+       "weather",
+       0.014483846667643884
+      ]
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "key": "wide_choice",
+   "kind": "choice",
+   "state": "The quarterly ledger needs reconciling before Friday.",
+   "spec": {
+    "key": "wide_choice",
+    "kind": "choice",
+    "state": "The quarterly ledger needs reconciling before Friday.",
+    "instructions": "Route to the right department.",
+    "options": [
+     [
+      "dept-a",
+      "handles matter a"
+     ],
+     [
+      "dept-b",
+      "handles matter b"
+     ],
+     [
+      "dept-c",
+      "handles matter c"
+     ],
+     [
+      "dept-d",
+      "handles matter d"
+     ],
+     [
+      "dept-e",
+      "handles matter e"
+     ],
+     [
+      "dept-f",
+      "handles matter f"
+     ],
+     [
+      "dept-g",
+      "handles matter g"
+     ],
+     [
+      "dept-h",
+      "handles matter h"
+     ],
+     [
+      "dept-i",
+      "handles matter i"
+     ],
+     [
+      "dept-j",
+      "handles matter j"
+     ],
+     [
+      "dept-k",
+      "handles matter k"
+     ],
+     [
+      "dept-l",
+      "handles matter l"
+     ]
+    ]
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      760,
+      48736,
+      45366,
+      3749,
+      30411,
+      7728,
+      1518,
+      6394,
+      13,
+      271,
+      14162,
+      25,
+      9287,
+      310,
+      279,
+      1245,
+      9016,
+      13,
+      198,
+      3670,
+      25,
+      198,
+      7,
+      32,
+      8,
+      43115,
+      7174,
+      25,
+      13081,
+      4766,
+      264,
+      198,
+      7,
+      33,
+      8,
+      43115,
+      1402,
+      25,
+      13081,
+      4766,
+      292,
+      198,
+      7,
+      34,
+      8,
+      43115,
+      1723,
+      25,
+      13081,
+      4766,
+      272,
+      198,
+      7,
+      35,
+      8,
+      43115,
+      1676,
+      25,
+      13081,
+      4766,
+      293,
+      198,
+      7,
+      36,
+      8,
+      43115,
+      5478,
+      25,
+      13081,
+      4766,
+      378,
+      198,
+      7,
+      37,
+      8,
+      43115,
+      2149,
+      25,
+      13081,
+      4766,
+      281,
+      198,
+      7,
+      38,
+      8,
+      43115,
+      2294,
+      25,
+      13081,
+      4766,
+      338,
+      198,
+      7,
+      39,
+      8,
+      43115,
+      2741,
+      25,
+      13081,
+      4766,
+      304,
+      198,
+      7,
+      40,
+      8,
+      43115,
+      17076,
+      25,
+      13081,
+      4766,
+      585,
+      198,
+      7,
+      41,
+      8,
+      43115,
+      12948,
+      25,
+      13081,
+      4766,
+      492,
+      198,
+      7,
+      42,
+      8,
+      43115,
+      12283,
+      25,
+      13081,
+      4766,
+      580,
+      198,
+      7,
+      43,
+      8,
+      43115,
+      2759,
+      25,
+      13081,
+      4766,
+      324,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 147,
+     "k": 12
+    }
+   ],
+   "answers": [
+    {
+     "label": "dept-f",
+     "probs": [
+      [
+       "dept-a",
+       0.06410945051035892
+      ],
+      [
+       "dept-b",
+       0.07698520814429162
+      ],
+      [
+       "dept-c",
+       0.11190009378490805
+      ],
+      [
+       "dept-d",
+       0.07648023705180934
+      ],
+      [
+       "dept-e",
+       0.06802383100732792
+      ],
+      [
+       "dept-f",
+       0.13778001788856406
+      ],
+      [
+       "dept-g",
+       0.04071760723396955
+      ],
+      [
+       "dept-h",
+       0.08703732629826189
+      ],
+      [
+       "dept-i",
+       0.0585485627847793
+      ],
+      [
+       "dept-j",
+       0.11287131099304092
+      ],
+      [
+       "dept-k",
+       0.06072962270583392
+      ],
+      [
+       "dept-l",
+       0.10481673159685459
+      ]
+     ],
+     "value": null
+    }
+   ]
+  },
+  {
+   "key": "multi_mixed",
+   "kind": "multi",
+   "state": "My card was charged twice for the same purchase.",
+   "spec": {
+    "key": "multi_mixed",
+    "kind": "multi",
+    "state": "My card was charged twice for the same purchase.",
+    "questions": [
+     {
+      "kind": "choice",
+      "instructions": "Which department should handle this?",
+      "options": [
+       [
+        "billing",
+        null
+       ],
+       [
+        "sales",
+        null
+       ]
+      ]
+     },
+     {
+      "kind": "noul",
+      "instructions": "Does this need a refund action?",
+      "true_criterion": "yes",
+      "false_criterion": "no"
+     },
+     {
+      "kind": "score",
+      "instructions": "How urgent is this?",
+      "levels": [
+       "low",
+       "medium",
+       "high"
+      ]
+     }
+    ]
+   },
+   "rows": [
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4888,
+      3575,
+      557,
+      11102,
+      10598,
+      364,
+      279,
+      1788,
+      7384,
+      13,
+      271,
+      14162,
+      25,
+      15451,
+      9016,
+      1220,
+      3579,
+      411,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      32419,
+      198,
+      5181,
+      8,
+      6416,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 36,
+     "k": 2
+    },
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4888,
+      3575,
+      557,
+      11102,
+      10598,
+      364,
+      279,
+      1788,
+      7384,
+      13,
+      271,
+      14162,
+      25,
+      12193,
+      411,
+      1144,
+      264,
+      20325,
+      1852,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      25,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      25,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 41,
+     "k": 2
+    },
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4888,
+      3575,
+      557,
+      11102,
+      10598,
+      364,
+      279,
+      1788,
+      7384,
+      13,
+      271,
+      14162,
+      25,
+      2500,
+      32556,
+      369,
+      411,
+      30,
+      198,
+      1941,
+      18988,
+      4087,
+      25,
+      3238,
+      198,
+      20810,
+      279,
+      10660,
+      4087,
+      4786,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 48,
+     "k": 2
+    },
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4888,
+      3575,
+      557,
+      11102,
+      10598,
+      364,
+      279,
+      1788,
+      7384,
+      13,
+      271,
+      14162,
+      25,
+      2500,
+      32556,
+      369,
+      411,
+      30,
+      198,
+      1941,
+      18988,
+      4087,
+      25,
+      10728,
+      198,
+      20810,
+      279,
+      10660,
+      4087,
+      4786,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 48,
+     "k": 2
+    },
+    {
+     "ids": [
+      1905,
+      25,
+      198,
+      4888,
+      3575,
+      557,
+      11102,
+      10598,
+      364,
+      279,
+      1788,
+      7384,
+      13,
+      271,
+      14162,
+      25,
+      2500,
+      32556,
+      369,
+      411,
+      30,
+      198,
+      1941,
+      18988,
+      4087,
+      25,
+      1496,
+      198,
+      20810,
+      279,
+      10660,
+      4087,
+      4786,
+      30,
+      198,
+      3670,
+      25,
+      198,
+      4205,
+      8,
+      874,
+      198,
+      5181,
+      8,
+      9542,
+      198,
+      15666,
+      25,
+      318
+     ],
+     "slot": 48,
+     "k": 2
+    }
+   ],
+   "answers": [
+    {
+     "label": "billing",
+     "probs": [
+      [
+       "billing",
+       0.9567044960862766
+      ],
+      [
+       "sales",
+       0.043295503913723325
+      ]
+     ],
+     "value": null
+    },
+    {
+     "label": "true",
+     "probs": [
+      [
+       "false",
+       1.0933658318631587e-36
+      ],
+      [
+       "true",
+       1.0
+      ]
+     ],
+     "value": null
+    },
+    {
+     "label": "high",
+     "probs": [
+      [
+       "low",
+       0.22025563820784466
+      ],
+      [
+       "medium",
+       0.3644242392652302
+      ],
+      [
+       "high",
+       0.415320122526925
+      ]
+     ],
+     "value": 1.1950644843190803
+    }
+   ]
+  }
+ ]
+}

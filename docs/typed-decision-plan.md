@@ -409,3 +409,22 @@ validated pattern, and the reduction is TWO mappings, not one.
   new facts; confirms the retrieve-then-rerank placement (§1.5 of the
   okfgraph plan) is the industry default, not our invention.
 
+## 11. decider-2b in-embroider (0.10.0, supersedes the Ollaya-side note)
+
+The §8b Evaluator footnote said decider-2b stays Ollaya-side. That was
+a serving gap, not a verdict: the user asked for it in the bench, and
+the bench drives embroider. So `Decider2B` (`src/decider2b.rs`) ports
+`decider-slots-v1` 1:1 - lettered/wide pieces, isolated yes/no score
+rows, ort_rows batching, per-qtype temps from `calibration.json`
+clamped to the checkpoint's own [0.05, 5.0]. Noul carries BOTH
+criteria (every S1MB noul ships both); no `option_order` (the
+reference has none). CUDA runs the parallel executor with default
+thread pools - the sequential planner aliases a shape buffer (ORT
+#4829 class, gossamer-sourced), `enable_mem_reuse=false` is
+unreachable from the C API, and `inter_op=1` re-triggers it (all
+probed). Goldens `fixtures/golden_decider2b.json` (8 cases) pin exact
+ids + 5e-4 on CPU and CUDA. Bench (GPU-only, same axis as §10):
+classify agree 0.696 full-coverage (800 rows incl. banking77) at
+~87 ms/row; noul-as-reranker nDCG@10 0.944/0.992/0.947/0.954 across the
+four Nano sets - the best reranker in the building, ahead of the
+dedicated cross-encoders on three of four.
