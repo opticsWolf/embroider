@@ -267,3 +267,34 @@ reduction mapping is contract and will be golden-pinned like any other.
   hardware; (3) Laya-as-reranker iff the eval harness shows a gap
   worth 450 ms. Binary Mattepiu fp32 stays the Noul/binary workbench.
 
+## 10. External corroboration (2026-10-29, via gossamer)
+
+Three sources, one consistent story — classifier-as-reranker is a
+validated pattern, and the reduction is TWO mappings, not one.
+
+- **hev, "Jev as a Reranker" (BEIR: SciFact/NFCorpus/FiQA):** the
+  canonical method is one **Noul per candidate** ("this document is
+  relevant to the query"), sort by P(true). Jev-batch 0.501 mean
+  nDCG@10 — alongside Voyage 0.504, Cohere 0.486, Jina 0.492; ahead of
+  MiniLM-L6 0.447, bge-v2-m3 0.471, Qwen3-0.6B 0.478, BM25 0.404.
+  Latency 223 ms p50 / 1.4 s p95 batch, $0.54/1k queries. Open-weights
+  latencies underline our G0 rule: Qwen3 5.5 s, v2-m3 2.2 s local.
+  Lesson for us: our Noul is the rerank primitive (currently
+  loud-unsupported — Laya serves it, GLiClass approximates it via
+  binary Choice); the okfgraph eval harness should reuse hev's axis
+  (same 3 corpora, nDCG@10, paired per-query) so our spikes compare
+  against published numbers, not vibes.
+- **hotchpotch/jev-reranker (Python lib):** `rerank()` (order,
+  threshold 0.0) vs `relevance_rerank()` (filter with a relevance
+  prompt that pushes weak candidates toward zero, threshold 0.2) —
+  **different prompts, because the goals conflict** (filtering crushes
+  relative order). Ships built-in prompts
+  (`src/jev_reranker/instructions.py`) + an eval harness vs
+  Sentence-Transformers CrossEncoder. Lesson for us: the reduction is
+  two golden-pinned mappings (rank-mode, filter-mode), not one; and
+  the instruction text is contract — version it with the goldens.
+- **Pinecone, "Rerankers and Two-Stage Retrieval":** standard framing
+  (bi-encoder recall → cross-encoder reorder; accuracy for time). No
+  new facts; confirms the retrieve-then-rerank placement (§1.5 of the
+  okfgraph plan) is the industry default, not our invention.
+
