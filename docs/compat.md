@@ -133,6 +133,46 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 - **Mirrors and conversions** we publish (e.g. the fp16 mirror) keep the
   upstream licence. Their model card must carry `license`, `base_model`,
   attribution to the upstream authors and a list of the changes made.
+
+## Model sizes & serving
+
+Download bytes per registry entry (graph + sidecar + tokenizer, as
+`open()` fetches them) and where each one runs. Latencies measured on
+the reference rig (RTX 3090 + 5950X, ORT 1.29, single question unless
+noted) — re-measure on yours before signing an SLO; the ordering, not
+the digits, is the contract. Weights-bytes ≈ VRAM floor (fp32 = 4
+B/param); fp16 halves download + VRAM with **zero CPU relief**
+(emulated half-precision) — it is a CUDA-serving variant everywhere
+it appears, never a CPU upgrade.
+
+| Registry model | Download | CPU | CUDA |
+|---|---|---|---|
+| `ms-marco-MiniLM-L-6-v2` | 91 MB | 1–3 ms/pair, CPU-native | same |
+| `mmarco-mMiniLMv2-L12-H384-v1` | 471 MB | 1–3 ms/pair, CPU-native | same |
+| `gliclass-small-v1.0` | 575 MB | **10.5 ms, the CPU sweet spot** | faster, unneeded |
+| `gliclass-v4-edge` | 1.77 GB | **38 ms, fine on CPU** | **2 ms** |
+| `laya-typed-decisions` | 1.70 GB (fp16: 846 MB) | 65 ms / 225 ms per 4-row batch — **slow-tier** | **~15 ms/batch** (fp16: 10–23 ms) |
+| `laya` (base English) | 1.70 GB (fp16: 846 MB) | ~220 ms — not classifier duty (near-chance zero-shot per Ollaya) | ~15 ms |
+| `laya-multilingual` | 1.32 GB (fp16: 678 MB) | **~97 ms, fastest Laya on CPU** | **~10 ms** |
+| `jina-embeddings-v5-text-small` | 2.40 GB (fp16: 1.20 GB) | ms-scale, CPU-native | — |
+| `jina-embeddings-v5-text-nano` | 866 MB (fp16: 425 MB, int8: 247 MB) | ms-scale, CPU-native | — |
+| `jina-v5-omni-nano` (vision) | 1.25 GB (fp16: 623 MB) | slow | fp16 CUDA |
+
+Consumer shapes that follow from the table:
+
+- **CPU-only floor** (~1 GB): one reranker (MiniLM for English at 91
+  MB, mMARCO at 471 MB for multilingual) + GLiClass-small (575 MB, 10
+  ms) + nano-embed int8 (247 MB). This is the okfgraph floor-pin shape.
+- **CPU with headroom** (+~3 GB): v4-edge (calibrated multi-label +
+  prompts, 38 ms) and Laya-multilingual (~100 ms) for descriptions +
+  P(true) relevance. Laya-typed-decisions and base stay off CPU duty.
+- **CUDA**: everything collapses to single-digit ms (v4-edge 2 ms,
+  Laya-td 15 ms/batch, multi 10 ms) — take the fp16 Laya variants to
+  halve download and VRAM. GLiClass stays fp32 until its own parity
+  gate is wired.
+- **Not served**: int8 on any decision model (rejected — the −1e4 mask
+  sentinel is unquantizable, drift 2.8–9997); Mapika/decider-2b (no
+  registry entry, Ollaya-side if ever).
 - **New registry entries** record the artifact's licence in this table in
   the same change. A model whose licence forbids redistributing adapted
   weights is referenced by upstream repo only, never mirrored.

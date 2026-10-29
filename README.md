@@ -56,7 +56,10 @@ spaces.
 ## Models
 
 Three blessed embedding entries (`src/acquire.rs`), all non-commercial
-weights (licences tabled in [docs/compat.md](docs/compat.md)):
+weights (licences tabled in [docs/compat.md](docs/compat.md)). Download
+bytes, per-model latencies and CPU-vs-CUDA guidance live in the
+[Model sizes & serving](docs/compat.md#model-sizes--serving) table —
+read it before choosing what a consumer downloads:
 
 | Registry id | Artifact repo | Precisions | Used for |
 |---|---|---|---|
