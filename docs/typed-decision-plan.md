@@ -222,5 +222,48 @@ torch 2.15 CPU + `trust_remote_code` for the parity reference.
 - **Decision:** small-v1.0 proceeds to `decide.rs` — cheapest faithful
   graph, seam-proving role fulfilled. Multi-label goes behind
   calibration + thresholds (consumer side); single-label is shippable
-  native. Laya and v4-edge bakeoffs unchanged in queue.
+  native. Laya and v4-edge bakeoffs unchanged in queue (Laya log below).
+
+## 9. B0 execution log — Laya (2026-10-29, via gossamer)
+
+Goal refinement: one weights family, two contracts — Laya as classifier
+(native Choice/Score/Noul) AND as reranker (binary-relevance Choice
+reduction: state=doc, question=query, P(relevant) as the score). The
+reduction mapping is contract and will be golden-pinned like any other.
+
+- **fp16 export (inferenceprince/laya-onnx @ `dd0f4db`): G1 pass, G0 KILL.**
+  General 5-input marker form, `logits` + `act_logits`, loads 0.9 s;
+  recipe reproduces the README (billing 0.97). But **~2.6 s/forward CPU**
+  (seq 44) — ~1000x the rerank spikes, the fp16-on-CPU pathology at
+  421M scale. Dead for CPU serving; CUDA unmeasured (box has a 3090).
+  Base-checkpoint caveat (Ollaya): base `laya` is near-chance zero-shot
+  on typed-decisions (0.357) — classifier duty wants the
+  `laya-typed-decisions` checkpoint (0.767 vs Jev 0.727), not the base
+  export. Revival conditions: CUDA numbers OR fp32 graph.
+- **Non-fp16 hunt (all Apache-2.0-tagged or base-model-derived):**
+  Mattepiu/laya-onnx @ `a7f385b` root `laya.onnx` (1.7 GB, true fp32) is
+  **binary-only** (`marker_pos [B,2]`) — fits Noul true/false and the
+  binary rerank reduction, not general Choice. Same for their int8.
+  wexare/laya-onnx @ `2ac7176` `laya_q8.onnx` (633 MB, opset 18) is the
+  **general form**, loads 0.6 s on the 1.29 pin.
+- **wexare q8 on CPU: functional, slow, thin.** Billing-choice correct
+  (0.969) at **~450 ms/decision** (45x GLiClass, 200x spikes — fails
+  G0 for CPU routing loops, viable as a slow-tier/GPU-standby).
+  Relevance reduction discriminates the right direction (pos 0.81 vs
+  neg 0.69 P(relevant)) but the gap is thin — rerank duty needs the
+  eval harness, not armchair (Mattepiu's own table: search relevance
+  0.628, weakest family alongside sentiment 0.442; intent/routing 0.991
+  and moderation 0.967 are the strong suits).
+- **Sanctioned pattern (Ollaya, corroboration not measurement):** each
+  checkpoint carries fp16 + fp32 graphs over one weights file, CPU
+  loads fp32 — 100% answer agreement vs torch fp32 ref (Δp ≤ 1.1e-4)
+  over 2,383 questions × 3 checkpoints. Our fp32 comes from a
+  third-party binary-only export; the general-fp32 path is Ollaya's
+  export script or a self-export (optimum) from `laya-typed-decisions`.
+  Their serving numbers: 14–20 ms/5-question request on RTX 5090 fp16.
+- **Standing order:** (1) GLiClass-small native (done, both paths —
+  decide + relevance reduction — work today); (2) Laya classifier via
+  typed-decisions checkpoint in fp32-graph or int8 form, G0–G5 on our
+  hardware; (3) Laya-as-reranker iff the eval harness shows a gap
+  worth 450 ms. Binary Mattepiu fp32 stays the Noul/binary workbench.
 
