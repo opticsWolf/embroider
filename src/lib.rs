@@ -52,7 +52,7 @@ pub use rerank::{
 pub use decide::{
     Decider, Decision, Question, DECIDE_ABSOLUTE_MAX, DECIDE_DEFAULT_MAX,
 };
-pub use laya::{LayaDecider, LayaDecision, LayaOption, LayaQuestion, LayaTemperatures};
+pub use laya::{LayaDecider, LayaDecision, LayaLongDecision, LayaOption, LayaQuestion, LayaTemperatures, BinningMap};
 pub use vision::{
     vision_target_size, JinaV5Vision, VISION_MAX_PIXELS, VISION_MIN_PIXELS,
 };
@@ -660,10 +660,62 @@ impl PyLayaDecider {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
     }
 
+    /// Install a fitted binning overlay from a JSON file (bare map or
+    /// laya calibration payload). Remaps `answer_confidence` on every
+    /// later `decide`; buckets the map does not cover pass through.
+    fn load_binning_map(&mut self, path: &str) -> PyResult<()> {
+        self.inner
+            .load_binning_map(std::path::Path::new(path))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+    }
+
+    /// Answer questions over a long state: `window`-token windows
+    /// stepping by `stride` (both `None` = the checkpoint-sized default),
+    /// one shared session run for all windows, per-type aggregation
+    /// (noul: strongest P(true); choice/score: most-confident window).
+    /// Returns `[(label, probs, value|None, confidence,
+    /// answer_confidence, act, window_start, window_end, windows), ...]`
+    /// in question order.
+    #[pyo3(signature = (state, questions, window=None, stride=None))]
+    fn predict_long(
+        &self,
+        py: Python<'_>,
+        state: &str,
+        questions: Vec<Bound<'_, PyAny>>,
+        window: Option<usize>,
+        stride: Option<usize>,
+    ) -> PyResult<Vec<(String, Vec<(String, f32)>, Option<f32>, f32, f32, f32, usize, usize, usize)>> {
+        let mut qs = Vec::with_capacity(questions.len());
+        for q in &questions {
+            qs.push(parse_laya_question(q)?);
+        }
+        py.detach(|| {
+            let ds = self
+                .inner
+                .predict_long(state, &qs, window, stride)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+            Ok(ds
+                .into_iter()
+                .map(|l| {
+                    (
+                        l.decision.label,
+                        l.decision.probabilities,
+                        l.decision.value,
+                        l.decision.confidence,
+                        l.decision.answer_confidence,
+                        l.decision.act_probability,
+                        l.window_start,
+                        l.window_end,
+                        l.windows,
+                    )
+                })
+                .collect())
+        })
+    }
+
     /// Checkpoint temperatures after the [0.5, 5.0] clamp: the triple,
     /// the per-bucket map, and the load-time rejection list.
-    fn temperature_report(&self) -> (Vec<f64>, Vec<(String, f64)>, Vec<String>) {
-        (
+    fn temperature_report(&self) -> (Vec<f64>, Vec<(String, f64)>, Vec<String>) {        (
             self.inner.temperatures().to_vec(),
             self.inner.temperature_by_options(),
             self.inner.temperature_rejections().to_vec(),

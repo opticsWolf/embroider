@@ -23,8 +23,9 @@
 //!
 //! Deliberately NOT ported (consumer/policy territory, as in laya
 //! itself): `predict_long` window scans (the caller windows + aggregates),
-//! `binning_map` calibration overlays (no checkpoint ships one),
-//! `lang_temperatures` overrides, hooks/serve/structured. Score here is
+//! A consumer-fitted [`BinningMap`] overlay is supported (no checkpoint
+//! ships one — see `LayaDecider::load_binning_map`); `lang_temperatures`
+//! overrides, hooks/serve/structured are not. Score here is
 //! Laya's score — a distribution over LEVELS with an expected value —
 //! not GLiClass's multi-label sigmoid: the two must never share a
 //! question type, so [`LayaQuestion`] is its own enum.
@@ -446,6 +447,167 @@ impl LayaTemperatures {
     }
 }
 
+/// Recalibrate one `answer_confidence` through a fitted binning map
+/// (`laya.calibrate.apply_binning_map`): full pass-through when the map
+/// has no entry for the bucket, so a bucket the map was not fit for
+/// keeps its temperature-scaled value instead of a wrong one.
+pub(crate) fn apply_binning_map(confidence: f64, bucket: &str, map: &BinningMap) -> f64 {
+    let entry = match map.get(bucket) {
+        Some(e) => e,
+        None => return confidence,
+    };
+    let b = (confidence * entry.bins as f64) as usize;
+    entry.values[b.min(entry.bins - 1)]
+}
+
+/// A fitted histogram-binning overlay: bucket key (`temp_bucket` form)
+/// → bin count + per-bin recalibrated confidences.
+#[derive(Clone, Debug, Default)]
+pub struct BinningMap {
+    entries: HashMap<String, BinEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct BinEntry {
+    bins: usize,
+    values: Vec<f64>,
+}
+
+impl BinningMap {
+    /// Parse a binning map from JSON: either the bare map
+    /// (`{"<bucket>": {"bins": n, "values": [...]}}`) or a laya
+    /// calibration payload carrying `binning_map` (temperatures in the
+    /// payload are ignored — checkpoint truth comes from
+    /// `rl_agent_config.json`). Shape-checked before anything loads:
+    /// `bins` must be an integer ≥ 1 (bools refused — `true` is not 1),
+    /// `values` exactly `bins` finite numbers in [0, 1]. A bad *binning
+    /// value* is refused, never clamped — nothing recalibrates a
+    /// confidence the way an out-of-range value would.
+    pub fn parse(json: &serde_json::Value) -> Result<Self> {
+        let obj = json.as_object().ok_or_else(|| {
+            anyhow!("binning map JSON must be an object")
+        })?;
+        let map_obj = match obj.get("binning_map") {
+            Some(nested) => nested.as_object().ok_or_else(|| {
+                anyhow!("calibration payload 'binning_map' must be an object")
+            })?,
+            None => obj,
+        };
+        let mut entries = HashMap::new();
+        for (bucket, entry) in map_obj {
+            let eobj = entry.as_object().ok_or_else(|| {
+                anyhow!("binning entry {bucket:?} must be an object")
+            })?;
+            let bins_v = eobj.get("bins").ok_or_else(|| {
+                anyhow!("binning entry {bucket:?} has no 'bins'")
+            })?;
+            // Bool is not an integer here: `bins: true` used to install
+            // a 1-bin map in silence.
+            let bins = match bins_v {
+                serde_json::Value::Number(n) => n.as_u64().filter(|&b| b >= 1).ok_or_else(|| {
+                    anyhow!("binning entry {bucket:?} 'bins' must be an integer >= 1")
+                })? as usize,
+                _ => {
+                    return Err(anyhow!(
+                        "binning entry {bucket:?} 'bins' must be an integer >= 1"
+                    ))
+                }
+            };
+            let values_v = eobj.get("values").ok_or_else(|| {
+                anyhow!("binning entry {bucket:?} has no 'values'")
+            })?;
+            let arr = values_v.as_array().ok_or_else(|| {
+                anyhow!("binning entry {bucket:?} 'values' must be a list")
+            })?;
+            if arr.len() != bins {
+                return Err(anyhow!(
+                    "binning entry {bucket:?} has {} values for {bins} bins",
+                    arr.len()
+                ));
+            }
+            let mut values = Vec::with_capacity(bins);
+            for v in arr {
+                let f = v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| {
+                    anyhow!("binning entry {bucket:?} values must be finite numbers")
+                })?;
+                if !(0.0..=1.0).contains(&f) {
+                    return Err(anyhow!(
+                        "binning entry {bucket:?} value {f} outside [0, 1] — refused, not clamped"
+                    ));
+                }
+                values.push(f);
+            }
+            entries.insert(bucket.clone(), BinEntry { bins, values });
+        }
+        Ok(Self { entries })
+    }
+
+    fn get(&self, bucket: &str) -> Option<&BinEntry> {
+        self.entries.get(bucket)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn buckets(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.entries.keys().cloned().collect();
+        v.sort();
+        v
+    }
+}
+
+/// Sliding-window spans over an `n`-token state: `size`-token windows
+/// stepping by `step`, budged to the token stream (`(i, min(i+size, n))`)
+/// — the `Agent.predict_long` loop exactly, including its short final
+/// window. Span-identity with the agent is what lets a golden pin the
+/// scan; do not "improve" this into tail-aligned windows without
+/// re-pinning. Contract: `1 <= step <= size` (enforced by
+/// `predict_long` before calling).
+pub(crate) fn plan_laya_spans(n: usize, size: usize, step: usize) -> Vec<(usize, usize)> {
+    debug_assert!(step >= 1 && step <= size && size >= 1);
+    let mut out = Vec::new();
+    let mut i = 0;
+    loop {
+        out.push((i, (i + size).min(n)));
+        if i + size >= n {
+            break;
+        }
+        i += step;
+    }
+    out
+}
+
+/// Which window decides a question: noul reads P(true) — evidence
+/// anywhere wins; choice/score read `answer_confidence` so a localized
+/// signal is not out-voted by neutral windows. First window wins ties
+/// (strict `>`, matching Python `max` — `max_by` would take the last).
+/// `stats` is per-window `(answer_confidence, p_true)`.
+pub(crate) fn select_laya_window(qtype: usize, stats: &[(f64, f64)]) -> usize {
+    let mut best = 0;
+    for (i, &(conf, p_true)) in stats.iter().enumerate() {
+        let score = if qtype == 2 { p_true } else { conf };
+        let best_score = if qtype == 2 { stats[best].1 } else { stats[best].0 };
+        if score > best_score {
+            best = i;
+        }
+    }
+    best
+}
+
+/// One long-document answer: the deciding window's decision plus the
+/// token span that decided it. The probability is that window's, not a
+/// calibrated whole-document number (same caveat as laya).
+#[derive(Clone, Debug)]
+pub struct LayaLongDecision {
+    pub decision: LayaDecision,
+    /// Token span into the tokenized state (no specials).
+    pub window_start: usize,
+    pub window_end: usize,
+    /// How many windows the scan ran.
+    pub windows: usize,
+}
+
 /// Decode one model row into an answer (the `_decode_answers` core:
 /// temperature → softmax → slot→caller unpermute → per-type shape).
 /// `logits`/`act` are the row's first-k / 2-wide slices; `order` the slot
@@ -456,6 +618,7 @@ pub(crate) fn decode_laya_row(
     q: &LayaQuestion,
     order: Option<&[usize]>,
     temps: &LayaTemperatures,
+    binning: Option<&BinningMap>,
 ) -> LayaDecision {
     let qt = qtype_of(q);
     let k = logits.len();
@@ -472,8 +635,23 @@ pub(crate) fn decode_laya_row(
         }
     }
     let pf: Vec<f32> = p.iter().map(|&x| x as f32).collect();
-    let confidence = confidence_from_probs(&p) as f32;
-    let answer_confidence = answer_confidence(&p) as f32;
+    // Noul reports max(P(true), P(false)) — the two-sided certainty —
+    // not the entropy concentration (the agent's noul branch never
+    // calls `confidence_from_probs`).
+    let confidence = if qt == 2 {
+        p[1].max(1.0 - p[1]) as f32
+    } else {
+        confidence_from_probs(&p) as f32
+    };
+    // The runtime bins before anyone reads `answer_confidence`: a
+    // fitted map remaps the max(p) here, an absent bucket passes
+    // through untouched.
+    let raw_conf = answer_confidence(&p);
+    let bucket = temp_bucket(qt, k);
+    let answer_confidence = match binning {
+        Some(m) => apply_binning_map(raw_conf, &bucket, m) as f32,
+        None => raw_conf as f32,
+    };
     let act = softmax_stable(&[act_logits[0] as f64, act_logits[1] as f64])[0] as f32;
 
     match q {
@@ -545,6 +723,7 @@ pub struct LayaDecider {
     head_max_len: usize,
     model_id: String,
     temps: LayaTemperatures,
+    binning: Option<BinningMap>,
     used_cuda: bool,
 }
 
@@ -706,6 +885,7 @@ impl LayaDecider {
             head_max_len,
             model_id: model_id.to_string(),
             temps,
+            binning: None,
             used_cuda: loaded.used_cuda,
         })
     }
@@ -746,6 +926,31 @@ impl LayaDecider {
     /// handle, same as `Decider::count_tokens`).
     pub fn count_tokens(&self, state: &str) -> Result<usize> {
         count_tokens_in(&self.tokenizer, state)
+    }
+
+    /// Install a fitted histogram-binning overlay onto `answer_confidence`
+    /// (the `binning_map` role). No checkpoint ships one — the map is
+    /// fitted by the consumer on held-out data for its own buckets, then
+    /// loaded here so every later `decide` reports binned `answer_conf`.
+    /// Buckets the map does not cover pass through untouched; the entropy
+    /// `confidence` is never binned (same as laya — the bins are fit on
+    /// max(p), not on entropy). Replaces any previously installed map.
+    pub fn load_binning_map(&mut self, path: &Path) -> Result<()> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow!("binning map not found: {}: {e}", path.display()))?;
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| anyhow!("binning map parses: {}: {e}", path.display()))?;
+        let map = BinningMap::parse(&json)?;
+        if map.is_empty() {
+            return Err(anyhow!("binning map at {} is empty — nothing to install", path.display()));
+        }
+        self.binning = Some(map);
+        Ok(())
+    }
+
+    /// Whether a binning overlay is installed.
+    pub fn has_binning_map(&self) -> bool {
+        self.binning.is_some()
     }
 
     /// Build one input row: `(input_ids, marker_positions)`.
@@ -878,7 +1083,169 @@ impl LayaDecider {
             let lrow: Vec<f32> = logits.row(r).iter().take(k).copied().collect();
             let arow: Vec<f32> = act.row(r).iter().copied().collect();
             let (_, q) = items[row.qi];
-            out.push(decode_laya_row(&lrow, &arow, q, row.order.as_deref(), &self.temps));
+            out.push(decode_laya_row(&lrow, &arow, q, row.order.as_deref(), &self.temps, self.binning.as_ref()));
+        }
+        Ok(out)
+    }
+
+    /// Answer questions over a state longer than the sequence cap: slide
+    /// token windows over the state, score every window through one
+    /// shared [`LayaDecider::decide_many`] run, and aggregate per
+    /// question — noul takes the strongest window's P(true) (evidence
+    /// anywhere), choice/score take the most-confident window's answer
+    /// (a localized signal out-votes neutral windows). The returned
+    /// probability is the deciding window's, not a calibrated
+    /// whole-document number.
+    ///
+    /// `window`/`stride` adapt the scan to the checkpoint: the default
+    /// window is the state budget the config leaves
+    /// (`max(64, max_len - head_max_len - 8)`, so a 512-ctxt base scans
+    /// narrower than the 1024-ctxt checkpoints) clamped to the room the
+    /// questions leave, with 50%-overlap steps by default. A window
+    /// wider than the room is clamped with a warning (its tail would
+    /// reach no model); a stride past the effective window fails loudly
+    /// (tokens between windows would be read by none). A state that
+    /// fits the window takes the fast path — one plain `decide`,
+    /// identical output, `windows: 1`.
+    pub fn predict_long(
+        &self,
+        state: &str,
+        questions: &[LayaQuestion],
+        window: Option<usize>,
+        stride: Option<usize>,
+    ) -> Result<Vec<LayaLongDecision>> {
+        for (i, q) in questions.iter().enumerate() {
+            validate_laya_question(i, q)?;
+        }
+        if questions.is_empty() {
+            return Ok(vec![]);
+        }
+        let state_ids = self
+            .tokenizer
+            .encode(state.replace("[MASK]", " ").as_str(), false)
+            .map_err(|e| anyhow!("state encode: {e}"))?;
+        let state_ids = state_ids.get_ids();
+        // The room is the tightest question's: windows are one shared
+        // row list, so a window sized for the roomiest question would be
+        // cut short for the tightest one.
+        let mut room = usize::MAX;
+        for q in questions {
+            let (head_ids, _, _) = build_laya_head(
+                &self.tokenizer,
+                q,
+                self.cls_id,
+                self.sep_id,
+                self.mask_id,
+                "[MASK]",
+                self.head_max_len,
+            )?;
+            room = room.min(self.max_len.saturating_sub(head_ids.len() + 1));
+        }
+        if room == 0 {
+            return Err(anyhow!(
+                "predict_long: the questions' options fill the whole sequence (max_len={}, \
+                 head_max_len={}), leaving no room for the state; no window can carry any of it",
+                self.max_len, self.head_max_len
+            ));
+        }
+        let requested = match window {
+            Some(n) if n >= 1 => n,
+            _ => std::cmp::max(64, self.max_len.saturating_sub(self.head_max_len + 8)),
+        };
+        let mut size = requested.min(room);
+        if size < requested {
+            eprintln!(
+                "embroider: predict_long window={requested} is wider than the {room} state tokens these \
+                 questions leave inside max_len={}, so every window would be truncated on the way to the \
+                 model; scanning with window={size} instead",
+                self.max_len
+            );
+        }
+        if size == 0 {
+            size = 1;
+        }
+        let mut step = match stride {
+            Some(0) => return Err(anyhow!("stride must be >= 1, got 0")),
+            Some(n) => n,
+            None => std::cmp::max(1, size / 2),
+        };
+        if step > size {
+            if size < requested && stride.map(|s| s <= requested).unwrap_or(false) {
+                // The caller's stride fit the window they asked for — the
+                // clamp moved the goalposts, so the stride follows it
+                // instead of failing on a self-consistent pair.
+                eprintln!(
+                    "embroider: predict_long stride was a 50% step for the window={requested} asked for, but \
+                     the window was reduced to {size} to fit the room; scanning with stride={} instead",
+                    std::cmp::max(1, size / 2)
+                );
+                step = std::cmp::max(1, size / 2);
+            } else {
+                return Err(anyhow!(
+                    "predict_long: stride={step} steps past the {size}-token window, so {} tokens between every \
+                     pair of windows would be read by no window at all; pass stride <= {size}",
+                    step - size
+                ));
+            }
+        }
+        // Fast path: the whole state fits the window, so `decide` reads
+        // it whole — identical output, one window counted.
+        if state_ids.len() <= size {
+            let decisions = self.decide(state, questions)?;
+            return Ok(decisions
+                .into_iter()
+                .map(|decision| LayaLongDecision {
+                    decision,
+                    window_start: 0,
+                    window_end: state_ids.len(),
+                    windows: 1,
+                })
+                .collect());
+        }
+        let spans = plan_laya_spans(state_ids.len(), size, step);
+        // Decode–re-encode round-trips exactly; every chunk flows through
+        // the standard row seam, so each window is scored identically to
+        // a direct `decide` on the same text.
+        let mut chunks: Vec<String> = Vec::with_capacity(spans.len());
+        for &(s, e) in &spans {
+            chunks.push(
+                self.tokenizer
+                    .decode(&state_ids[s..e], true)
+                    .map_err(|e| anyhow!("chunk decode failed: {e}"))?,
+            );
+        }
+        let mut items: Vec<(&str, &LayaQuestion)> = Vec::with_capacity(spans.len() * questions.len());
+        for c in &chunks {
+            for q in questions {
+                items.push((c.as_str(), q));
+            }
+        }
+        let flat = self.decide_many(&items)?;
+        let nq = questions.len();
+        let mut out = Vec::with_capacity(nq);
+        for (qi, q) in questions.iter().enumerate() {
+            let stats: Vec<(f64, f64)> = spans
+                .iter()
+                .enumerate()
+                .map(|(w, _)| {
+                    let d = &flat[w * nq + qi];
+                    let p_true = d
+                        .probabilities
+                        .iter()
+                        .find(|(o, _)| o == "true")
+                        .map(|(_, p)| *p as f64)
+                        .unwrap_or(0.0);
+                    (d.answer_confidence as f64, p_true)
+                })
+                .collect();
+            let win = select_laya_window(qtype_of(q), &stats);
+            let (ws, we) = spans[win];
+            out.push(LayaLongDecision {
+                decision: flat[win * nq + qi].clone(),
+                window_start: ws,
+                window_end: we,
+                windows: spans.len(),
+            });
         }
         Ok(out)
     }
@@ -946,7 +1313,7 @@ mod tests {
             ],
             option_order: None,
         };
-        let d = decode_laya_row(&logits, &[0.0, 0.0], &q, None, &temps);
+        let d = decode_laya_row(&logits, &[0.0, 0.0], &q, None, &temps, None);
         assert_eq!(d.label, "a");
         for (i, (_, p)) in d.probabilities.iter().enumerate() {
             assert!((*p as f64 - want[i]).abs() < 1e-4, "{p} vs {}", want[i]);
@@ -965,7 +1332,7 @@ mod tests {
         // Slots hold [high, low] (order [1, 0]): slot 1 carries the big
         // logit, and slot 1 is caller-option 0 ("low").
         let logits = [0.0f32, 2.0];
-        let d = decode_laya_row(&logits, &[0.0, 0.0], &q, Some(&[1, 0]), &temps);
+        let d = decode_laya_row(&logits, &[0.0, 0.0], &q, Some(&[1, 0]), &temps, None);
         assert_eq!(d.label, "low");
         assert_eq!(d.probabilities[0].0, "low");
         assert!(d.probabilities[0].1 > 0.8);
@@ -976,7 +1343,7 @@ mod tests {
     fn noul_reads_p_true() {
         let temps = LayaTemperatures { triple: [1.0, 1.0, 1.0], by_options: HashMap::new(), rejections: vec![] };
         let q = LayaQuestion::Noul { instructions: "holds?".to_string(), statement: "s".to_string() };
-        let d = decode_laya_row(&[-1.0, 1.0], &[0.5, -0.5], &q, None, &temps);
+        let d = decode_laya_row(&[-1.0, 1.0], &[0.5, -0.5], &q, None, &temps, None);
         assert_eq!(d.label, "true");
         assert_eq!(d.probabilities.len(), 2);
         assert!(d.probabilities[1].1 > 0.8);
@@ -1002,6 +1369,54 @@ mod tests {
         };
         assert!(validate_laya_question(3, &bad).err().unwrap().to_string().contains("permutation"));
         assert!(validate_laya_question(4, &LayaQuestion::Noul { instructions: "x".to_string(), statement: String::new() }).is_ok());
+    }
+
+    #[test]
+    fn binning_map_parses_and_refuses() {
+        // Bare map.
+        let m = BinningMap::parse(&serde_json::json!({
+            "choice:2": {"bins": 2, "values": [0.1, 0.9]},
+        }))
+        .expect("parse");
+        assert_eq!(apply_binning_map(0.05, "choice:2", &m), 0.1);
+        assert_eq!(apply_binning_map(0.5, "choice:2", &m), 0.9);
+        assert_eq!(apply_binning_map(1.0, "choice:2", &m), 0.9);
+        // Absent bucket passes through.
+        assert_eq!(apply_binning_map(0.7, "noul:2", &m), 0.7);
+        // Laya calibration payload nesting (temperatures ignored).
+        let p = BinningMap::parse(&serde_json::json!({
+            "version": 2,
+            "temperature": [1.0, 1.0, 1.0],
+            "binning_map": {"score:3-5": {"bins": 1, "values": [0.42]}},
+        }))
+        .expect("payload parse");
+        assert_eq!(apply_binning_map(0.99, "score:3-5", &p), 0.42);
+        // Refusals: bool bins, zero bins, length mismatch, out-of-range.
+        for bad in [
+            serde_json::json!({"choice:2": {"bins": true, "values": [0.5]}}),
+            serde_json::json!({"choice:2": {"bins": 0, "values": []}}),
+            serde_json::json!({"choice:2": {"bins": 2, "values": [0.5]}}),
+            serde_json::json!({"choice:2": {"bins": 1, "values": [1.5]}}),
+            serde_json::json!({"choice:2": {"bins": 1, "values": [f64::NAN]}}),
+            serde_json::json!([1, 2]),
+        ] {
+            assert!(BinningMap::parse(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn spans_match_agent_loop_and_first_wins_ties() {
+        // 10 tokens, size 4, step 2: the agent's short-final-window loop.
+        assert_eq!(
+            plan_laya_spans(10, 4, 2),
+            vec![(0, 4), (2, 6), (4, 8), (6, 10)]
+        );
+        assert_eq!(plan_laya_spans(3, 8, 4), vec![(0, 3)]);
+        // Ties go to the first window (strict >), both rules.
+        assert_eq!(select_laya_window(2, &[(0.1, 0.5), (0.9, 0.5)]), 0);
+        assert_eq!(select_laya_window(0, &[(0.5, 0.0), (0.5, 0.0), (0.6, 0.0)]), 2);
+        assert_eq!(select_laya_window(1, &[(0.2, 0.0), (0.8, 0.0)]), 1);
+        assert_eq!(select_laya_window(2, &[(0.1, 0.2), (0.1, 0.9)]), 1);
     }
 
     #[test]

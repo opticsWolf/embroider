@@ -219,3 +219,124 @@ fn laya_e2e_parity_vs_agent_goldens() {
     .to_string();
     assert!(e.contains("LayaDecider"), "{e}");
 }
+
+fn open_laya() -> Option<LayaDecider> {
+    let (onnx, tok, cfg) = match (env("LAYA_E2E_ONNX"), env("LAYA_E2E_TOK"), env("LAYA_E2E_CFG")) {
+        (Some(o), Some(t), Some(c)) => (o, t, c),
+        _ => {
+            eprintln!("laya e2e skipped: set LAYA_E2E_ONNX/LAYA_E2E_TOK/LAYA_E2E_CFG");
+            return None;
+        }
+    };
+    Some(
+        LayaDecider::open_files(
+            Path::new(&onnx),
+            Path::new(&tok),
+            Path::new(&cfg),
+            DeviceReq::Cpu,
+            None,
+            false,
+        )
+        .expect("open_files"),
+    )
+}
+
+#[test]
+#[ignore]
+fn laya_e2e_predict_long_matches_agent_scan() {
+    let d = match open_laya() {
+        Some(d) => d,
+        None => return,
+    };
+    let text = std::fs::read_to_string("fixtures/golden_laya_td.json").expect("golden readable");
+    let fx: Value = serde_json::from_str(&text).expect("fixture parses");
+    let window = fx["long_window"].as_u64().expect("window") as usize;
+    let stride = fx["long_stride"].as_u64().expect("stride") as usize;
+    let state = fx["long_state"].as_str().expect("long state").to_string();
+    let cases = fx["long_cases"].as_array().expect("long cases");
+    // The scan answers rounded to 4 decimals (the agent's presentation
+    // rounding, not the Rust core) — pinned at 1e-4.
+    let tol = 1e-4;
+    let items: Vec<(String, LayaQuestion)> = cases
+        .iter()
+        .map(|c| (state.clone(), build_question(c)))
+        .collect();
+    let refs: Vec<(&str, &LayaQuestion)> =
+        items.iter().map(|(s, q)| (s.as_str(), q)).collect();
+    let questions: Vec<LayaQuestion> = refs.iter().map(|(_, q)| (*q).clone()).collect();
+    let got = d.predict_long(&state, &questions, Some(window), Some(stride)).expect("scan");
+    assert_eq!(got.len(), cases.len());
+    for (i, c) in cases.iter().enumerate() {
+        let k = c["key"].as_str().expect("key");
+        let l = &got[i];
+        let dec = &l.decision;
+        assert_eq!(dec.label, c["label"].as_str().expect("label"), "{k} label");
+        let want: Vec<(String, f64)> = c["probs"]
+            .as_array()
+            .expect("probs")
+            .iter()
+            .map(|p| (p[0].as_str().expect("opt").to_string(), p[1].as_f64().expect("prob")))
+            .collect();
+        assert_eq!(dec.probabilities.len(), want.len(), "{k} arity");
+        for (j, (opt, p)) in dec.probabilities.iter().enumerate() {
+            assert_eq!(opt, &want[j].0, "{k} order");
+            let dd = (*p as f64 - want[j].1).abs();
+            assert!(dd <= tol, "{k}[{opt}]: got {p} want {} (|Δ|={dd})", want[j].1);
+        }
+        for (field, have) in [
+            ("confidence", dec.confidence as f64),
+            ("answer_confidence", dec.answer_confidence as f64),
+            ("act_probability", dec.act_probability as f64),
+        ] {
+            let v = c[field].as_f64().expect(field);
+            assert!((have - v).abs() <= tol, "{k} {field}: got {have} want {v}");
+        }
+        // Span-identity with the agent: same window decided, same
+        // token span, same window count.
+        let w = c["window"].as_object().expect("window");
+        assert_eq!(l.window_start, w["token_start"].as_u64().expect("start") as usize, "{k} start");
+        assert_eq!(l.window_end, w["token_end"].as_u64().expect("end") as usize, "{k} end");
+        assert_eq!(l.windows, w["count"].as_u64().expect("count") as usize, "{k} count");
+        assert_eq!(l.windows, c["windows"].as_u64().expect("windows") as usize, "{k} windows");
+    }
+    // The scan actually selected mid-document windows (not window 0) —
+    // the aggregation rule did work, not just the fast path.
+    assert!(got.iter().any(|l| l.window_start > 0), "a middle window must decide");
+    // A short state takes the fast path: identical to decide, one window.
+    let short = d
+        .predict_long("The football match ended 2-1.", &questions[..1], Some(window), Some(stride))
+        .expect("fast path");
+    assert_eq!(short.len(), 1);
+    assert_eq!(short[0].windows, 1);
+    assert_eq!(short[0].window_start, 0);
+}
+
+#[test]
+#[ignore]
+fn laya_e2e_binning_map_remaps_mechanism() {
+    let mut d = match open_laya() {
+        Some(d) => d,
+        None => return,
+    };
+    assert!(!d.has_binning_map());
+    let sport = LayaQuestion::Choice {
+        instructions: "Decide the topic.".to_string(),
+        options: vec![LayaOption::plain("sports"), LayaOption::plain("cooking")],
+        option_order: None,
+    };
+    let state = "The football match ended 2-1 after extra time.";
+    let before = d.decide(state, &[sport.clone()]).expect("decide")[0].clone();
+    // Synthetic 2-bin map (mechanism proof, not a fit): confidence
+    // 0.91 lands in bin 1 → 0.85, probabilities untouched.
+    let dir = std::env::temp_dir().join("embroider-laya-e2e-binning.json");
+    std::fs::write(&dir, r#"{"choice:2": {"bins": 2, "values": [0.15, 0.85]}}"#)
+        .expect("write map");
+    d.load_binning_map(&dir).expect("load map");
+    assert!(d.has_binning_map());
+    let after = d.decide(state, &[sport]).expect("decide")[0].clone();
+    assert_eq!(after.probabilities, before.probabilities, "probs untouched");
+    assert_eq!(after.confidence, before.confidence, "entropy untouched");
+    assert!((after.answer_confidence - 0.85).abs() < 1e-6, "binned: {}", after.answer_confidence);
+    assert!((before.answer_confidence - 0.9134).abs() < 1e-3, "raw: {}", before.answer_confidence);
+    std::fs::remove_file(&dir).ok();
+}

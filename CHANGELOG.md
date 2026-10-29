@@ -3,6 +3,30 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.8.0] — 2026-10-29
+
+### Added
+- `LayaDecider::predict_long` (long-document scan in the `score_long`
+  vein): checkpoint-sized default window
+  (`max(64, max_len - head_max_len - 8)`, so the 512-ctxt base scans
+  narrower than the 1024-ctxt checkpoints), clamped to the tightest
+  question's room with a warning, stride past the effective window
+  refused loudly; one shared session run for all windows, per-type
+  aggregation (noul: strongest P(true); choice/score: most-confident
+  window), deciding span reported. Fast path for fitting states
+  (identical to `decide`). Agent-scan golden (`long_cases`, 7 windows,
+  mid-document selection) + span-identity gates at 1e-4; span loop
+  and first-wins-ties selection unit-pinned.
+- `BinningMap` overlay (`LayaDecider::load_binning_map`, Python too):
+  bare map or laya calibration payload, shape-refused (bool/zero
+  bins, length mismatch, out-of-range values) never clamped;
+  remaps `answer_confidence` for fitted buckets, passes the rest
+  through, entropy `confidence` untouched. No checkpoint ships one —
+  the map is consumer-fitted. Mechanism e2e-pinned with a synthetic
+  map.
+- Noul `confidence` corrected to max(P(true), P(false)) (the agent's
+  noul branch never reported entropy) — caught by the new scan golden.
+
 ## [0.7.0] — 2026-10-29
 
 ### Added

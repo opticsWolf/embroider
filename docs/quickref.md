@@ -161,6 +161,9 @@ d.decide("My invoice shows a double charge.", [
 d.temperature_report()   # (triple, per-bucket map, clamp rejections)
 d.decide(state, [("score", "Rate the sentiment.", ["negative", "neutral", "positive"])])
 # -> value = expected level index, label = top level text
+d.predict_long(long_doc, [("noul", "Does it answer Q?", "passage holds the answer.")], window=128, stride=64)
+# -> one shared run, strongest-P(true) window decides; spans reported
+d.load_binning_map("calibration.json")   # fitted overlay only; nothing shipped
 ```
 
 Sequence cap: `max_length` (default 512, the model ceiling); truncation is

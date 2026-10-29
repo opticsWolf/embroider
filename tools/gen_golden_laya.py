@@ -116,7 +116,10 @@ for c in cases:
     if order and len(order) == len(p):
         canon = np.empty_like(p); canon[np.asarray(order)] = p; p = canon
     e = -(np.clip(p, 1e-12, 1.0) * np.log(np.clip(p, 1e-12, 1.0))).sum()
-    conf = 1.0 if k < 2 else min(1.0, max(0.0, 1.0 - float(e) / math.log(k)))
+    if q['t'] == 'noul':
+        conf = max(float(p[1]), 1.0 - float(p[1]))
+    else:
+        conf = 1.0 if k < 2 else min(1.0, max(0.0, 1.0 - float(e) / math.log(k)))
     aconf = min(1.0, max(0.0, float(p.max())))
     az = act_logits[0].astype(np.float64); az = az - az.max()
     ae = np.exp(az); act = float(ae[0] / ae.sum())
@@ -140,16 +143,92 @@ for c in cases:
                 "state_tokens": len(it["ids"])})
 json.dump(out, open("D:/tmp/laya-scratch/stage/laya-ref.json", "w"))
 print("generated", len(out))
+
+# Long-document scan through the AGENT's predict_long (window/stride
+# identical to the Rust e2e call below). Answers come back rounded to
+# 4 decimals with window attribution -- the e2e pins them at 1e-4.
+LONG_Q = {
+    "long_billing": {"type": "choice",
+                     "instructions": "Route the ticket to the right team.",
+                     "criteria": {"billing": "invoices, charges and payments",
+                                  "technical": "login, errors and crashes"}},
+    "long_relevance": {"type": "noul",
+                       "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+                       "criteria": {"false": None,
+                                    "true": "Hold the reset button for 10 seconds to restore factory settings."}},
+}
+LONG_STATE = json.load(open("D:/tmp/laya-scratch/stage/laya-long.json"))
+scan = agent.predict_long(LONG_STATE, LONG_Q, window=128, stride=64)
+long_out = {"window": 128, "stride": 64, "state": LONG_STATE, "answers": {}}
+for qid, ans in scan["answers"].items():
+    a = dict(ans)
+    w = a.pop("window", None)
+    probs = a.get("probabilities")
+    if isinstance(probs, dict):
+        probs = [[k, float(v)] for k, v in probs.items()]
+    action = a.get("action") or {}
+    long_out["answers"][qid] = {
+        "type": a.get("type"), "label": a.get("choice", a.get("noul", a.get("score"))),
+        "probs": probs, "value": a.get("score"),
+        "confidence": a.get("confidence"), "answer_confidence": a.get("answer_confidence"),
+        "act_probability": action.get("act_probability"), "window": w,
+        "windows": scan["usage"].get("windows"),
+    }
+json.dump(long_out, open("D:/tmp/laya-scratch/stage/laya-long-ref.json", "w"))
+print("scanned", len(long_out["answers"]), "windows:", scan["usage"].get("windows"))
 """.replace("GRAPH_PATH", ONNX)
+
+def long_cases(long_ref):
+    """Reformat the agent scan answers into fixture entries. The agent
+    reports noul as a bare P(true) number (no label, no prob pair), so
+    the pair and the true/false label are reconstructed from it --
+    formatting only, the numbers stay the agent's (rounded to 4)."""
+    out = []
+    for qid, a in long_ref["answers"].items():
+        if a["type"] == "choice":
+            kind, label = "choice", a["label"]
+            probs = a["probs"]
+            options = [[k, v] for k, v in LONG_Q_DEF[qid].get("criteria", {}).items()]
+            statement = None
+        else:
+            kind = "noul"
+            p_true = float(a["label"])
+            probs = [["false", round(1.0 - p_true, 6)], ["true", round(p_true, 6)]]
+            label = "true" if p_true >= 1.0 - p_true else "false"
+            options, statement = None, LONG_Q_DEF[qid]["criteria"]["true"]
+        out.append({"key": qid, "kind": kind,
+                    "instructions": LONG_Q_DEF[qid]["instructions"],
+                    "options": options, "statement": statement,
+                    "label": label, "value": a["value"], "probs": probs,
+                    "confidence": a["confidence"],
+                    "answer_confidence": a["answer_confidence"],
+                    "act_probability": a["act_probability"],
+                    "window": a["window"], "windows": a["windows"]})
+    return out
+
 
 if __name__ == "__main__":
     json.dump(CASES, open(f"{SCRATCH}/laya-cases.json", "w"))
+    filler = "Preheat the oven to 200 degrees and fold the dough gently until it rises. "
+    signal_billing = "My invoice shows a double charge for last month and I want a refund. "
+    signal_noul = "Hold the reset button for 10 seconds to restore factory settings. "
+    long_state = filler * 14 + signal_billing + filler * 4 + signal_noul + filler * 10
+    json.dump(long_state, open(f"{SCRATCH}/laya-long.json", "w"))
+    LONG_Q_DEF = {
+        "long_billing": {"instructions": "Route the ticket to the right team.",
+                         "criteria": {"billing": "invoices, charges and payments",
+                                      "technical": "login, errors and crashes"}},
+        "long_relevance": {"instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+                           "criteria": {"false": None,
+                                        "true": "Hold the reset button for 10 seconds to restore factory settings."}},
+    }
     r = subprocess.run([sys.executable, "-c", GEN], capture_output=True, text=True)
     print(r.stdout.strip())
     if r.returncode != 0:
         print(r.stderr[-3000:])
         raise SystemExit("generator failed")
     ref = {o["key"]: o for o in json.load(open(f"{SCRATCH}/laya-ref.json"))}
+    long_ref = json.load(open(f"{SCRATCH}/laya-long-ref.json"))
     cases = []
     counts = {}
     for c in CASES:
@@ -183,6 +262,10 @@ if __name__ == "__main__":
         "head_max_len": 256,
         "token_counts": counts,
         "cases": cases,
+        "long_window": long_ref["window"],
+        "long_stride": long_ref["stride"],
+        "long_state": long_ref["state"],
+        "long_cases": long_cases(long_ref),
     }
     with open(OUT, "w") as fh:
         json.dump(fixture, fh, indent=1)

@@ -83,7 +83,10 @@ Rules:
   sigmoid, so `Decider` refuses Laya ids and `LayaDecider` refuses
   non-Laya ids. Fitted per-bucket temperatures clamped to [0.5, 5.0]
   (rejections queryable, `choice:11+` refused); decode in float64,
-  `encode_row` exposes the construction for inspection. Golden
+  `encode_row` exposes the construction for inspection. `predict_long`
+  (checkpoint-sized windows, per-type aggregation) + `load_binning_map`
+  (fitted overlay, none shipped) round out the long-document and
+  calibration stories. Golden
   `fixtures/golden_laya_td.json` (agent-built rows + raw reference
   decode, 7 cases) + ignored `tests/laya_e2e.rs` (exact ids + markers,
   abs 1e-6 on every number). `TaskKind::DecideLaya` (`decide-laya`)

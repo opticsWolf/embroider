@@ -268,7 +268,7 @@
      0.554124
     ]
    ],
-   "confidence": 0.008469,
+   "confidence": 0.554124,
    "answer_confidence": 0.554124,
    "act_probability": 1.0,
    "agent_ids": [
@@ -355,7 +355,7 @@
      0.038954
     ]
    ],
-   "confidence": 0.762524,
+   "confidence": 0.961046,
    "answer_confidence": 0.961046,
    "act_probability": 1.0,
    "agent_ids": [
@@ -551,6 +551,78 @@
      null
     ]
    ]
+  }
+ ],
+ "long_window": 128,
+ "long_stride": 64,
+ "long_state": "Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. My invoice shows a double charge for last month and I want a refund. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Hold the reset button for 10 seconds to restore factory settings. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. Preheat the oven to 200 degrees and fold the dough gently until it rises. ",
+ "long_cases": [
+  {
+   "key": "long_billing",
+   "kind": "choice",
+   "instructions": "Route the ticket to the right team.",
+   "options": [
+    [
+     "billing",
+     "invoices, charges and payments"
+    ],
+    [
+     "technical",
+     "login, errors and crashes"
+    ]
+   ],
+   "statement": null,
+   "label": "billing",
+   "value": null,
+   "probs": [
+    [
+     "billing",
+     0.9024
+    ],
+    [
+     "technical",
+     0.0976
+    ]
+   ],
+   "confidence": 0.5385,
+   "answer_confidence": 0.9024,
+   "act_probability": 1.0,
+   "window": {
+    "index": 2,
+    "token_start": 128,
+    "token_end": 256,
+    "count": 7
+   },
+   "windows": 7
+  },
+  {
+   "key": "long_relevance",
+   "kind": "noul",
+   "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+   "options": null,
+   "statement": "Hold the reset button for 10 seconds to restore factory settings.",
+   "label": "false",
+   "value": null,
+   "probs": [
+    [
+     "false",
+     0.5549
+    ],
+    [
+     "true",
+     0.4451
+    ]
+   ],
+   "confidence": 0.5549,
+   "answer_confidence": 0.5549,
+   "act_probability": 1.0,
+   "window": {
+    "index": 4,
+    "token_start": 256,
+    "token_end": 384,
+    "count": 7
+   },
+   "windows": 7
   }
  ]
 }

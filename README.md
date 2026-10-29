@@ -326,7 +326,16 @@ agent's numpy arithmetic), cast to f32 at the boundary; act head reads
 `softmax(act_logits)[0]` (`.act_probability`, feeds escalation).
 Collation pads marker columns to `max(kmax, 2)` — the exported head
 takes `topk(2)`, so one-option questions still collate two columns.
-Goldens live in `fixtures/golden_laya_td.json` (agent-built rows + raw
+`predict_long(state, questions, window, stride)` scans states past the
+cap: token windows (default `max(64, max_len - head_max_len - 8)` — the
+checkpoint's own state budget — clamped to the room the questions
+leave, 50%-overlap steps), one shared session run for all windows,
+per-type aggregation (noul: strongest P(true); choice/score:
+most-confident window). Returns the deciding window's decision plus
+its token span — that window's numbers, not calibrated document
+numbers. A `BinningMap` overlay (`load_binning_map`, bare map or laya
+calibration payload) remaps `answer_confidence` for fitted buckets
+and passes the rest through; no checkpoint ships one. Goldens live in `fixtures/golden_laya_td.json` (agent-built rows + raw
 float64 reference decode, 7 cases incl. permutation + solo + relevance
 probes) with the ignored `tests/laya_e2e.rs` asserting exact input-id
 + marker equality and 1e-6 on every number. Deliberately not ported:
