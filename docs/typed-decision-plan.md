@@ -266,8 +266,52 @@ reduction mapping is contract and will be golden-pinned like any other.
 - **Standing order:** (1) GLiClass-small native (done, both paths —
   decide + relevance reduction — work today); (2) Laya classifier via
   typed-decisions checkpoint in fp32-graph or int8 form, G0–G5 on our
-  hardware; (3) Laya-as-reranker iff the eval harness shows a gap
-  worth 450 ms. Binary Mattepiu fp32 stays the Noul/binary workbench.
+  hardware — **bakeoff done, see §9b**; verdict: adopt (CUDA) / slow-tier
+  (CPU); (3) Laya-as-reranker iff the eval harness shows a gap worth
+  the provider-appropriate cost (15 ms CUDA, 225 ms CPU). Binary
+  Mattepiu fp32 stays the Noul/binary workbench.
+
+## 9b. B0 execution — laya-typed-decisions self-export fp32 (2026-10-29)
+
+Upstream: `convaiinnovations/laya-typed-decisions` @ `1a793eb` (the
+revision desplega validated; HEAD is `e929ae5`). Apache-2.0. This
+checkpoint's config — **max_len 1024 / head_max_len 256**, fitted
+per-bucket temperatures (`temperature_by_options`) — differs from the
+base export's 512/192; the registry entry carries 1024, not the
+decide.rs default.
+
+Export (self, recipe mirrors MstyAI): torch `DecisionModel` via
+`torch.onnx.export(dynamo=True, opset_version=18)` → single graph,
+5 inputs (`input_ids`, `attention_mask`, `marker_pos`, `marker_mask`,
+`qtype`), 2 outputs (`logits`, `act_logits`). Two pitfalls recorded:
+(1) `dynamic_shapes=True` is rejected — pass an explicit Dim dict
+(batch/seq≤1024/k≤256) or the trace silently bakes static dims
+(first export scored until a 1-row input failed `Expected: 4`);
+(2) run the console UTF-8 (`PYTHONUTF8=1`), the export logger prints
+non-cp1252 glyphs. Result: 3.3 MB graph + 1.69 GB `.onnx.data`
+sidecar (the `Artifact.sidecar` shape, as with the fp16 export).
+
+- **G1: PASS.** 1606 nodes, 32 distinct ops, zero non-standard.
+- **G2: PASS.** torch↔ORT max|Δ| **2.0e-6** on `logits` (4-row batch
+  covering choice/score/noul); `act_logits` 1.5e-3 on a ±4887 scale
+  (relative 3e-7 — negligible; act head feeds escalation, not answers).
+- **G0: SPLIT by provider (py-ort 1.31; 1.29-pin number pending).**
+  CPU: ~65 ms/single-question, ~225 ms/4-row batch — 30x the spikes,
+  slow-tier only. **CUDA (RTX 3090): ~15 ms/4-row batch** (~3.6 ms/row,
+  15x over CPU) — routing-viable. Verdict: adopt for CUDA serving,
+  slow-tier on CPU; the q8 (450 ms) is retired by this graph on both.
+- **G3: PASS.** 4/4 probes correct (billing-choice, boiler-choice,
+equipment-noul, sentiment-score) with correct-option margins.
+- **Temperature application verified exact.** `t_scale =
+  temperature_by_options.get(temp_bucket(qtype, k), temperature[qtype])`;
+billing softmax(L/1.7601) reproduces the agent's [0.7463, 0.2086,
+  0.0451] to 4 decimals. embroider must replicate three details:
+  bucket key `f"{type}:{size}"` (2 / 3-5 / 6-10 / 11+), **clamp
+  [0.5, 5.0] with rejection warnings** (`clamp_temperature` /
+  `temperature_rejected`), and the `choice:11+` 0.1006 entry which the
+  clamp refuses (it would sharpen ~10x — the checkpoint's own code
+  calls that dishonest). No `binning_map` ships by default (`None`).
+- **G4: N/A** (native fp32). **G5:** per-type cases pin in goldens.
 
 ## 10. External corroboration (2026-10-29, via gossamer)
 
