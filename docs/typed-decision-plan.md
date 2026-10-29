@@ -311,7 +311,18 @@ billing softmax(L/1.7601) reproduces the agent's [0.7463, 0.2086,
   `temperature_rejected`), and the `choice:11+` 0.1006 entry which the
   clamp refuses (it would sharpen ~10x — the checkpoint's own code
   calls that dishonest). No `binning_map` ships by default (`None`).
-- **G4: N/A** (native fp32). **G5:** per-type cases pin in goldens.
+- **G4: fp16 adopted (CUDA-only), int8 rejected.** fp16 cast (IO fp32)
+  drifts 1.5e-3 (td) / 3.9e-3 (base) / 4.3e-3 (multi) with no CPU
+  relief — the rerank lesson verbatim — so the fp16 graphs ship as
+  CUDA-serving variants (half download/VRAM), not CPU upgrades.
+  Dynamic int8 (ORT, qint8) is **destructive**: drift 2.8–5.4 on the
+  logit scale with a 3/4 argmax flip on base — the −1e4 masked-logit
+  head needs calibration-aware static quant, which needs the eval
+  harness (open route, not hosted). Two converter pitfalls recorded:
+  `onnx.save_model` appends to an existing `.data` path (delete
+  first), and naive all-initializer fp16 casting breaks shape-sensitive
+  nodes (use the Cast-inserting converter, not a dtype loop).
+  **G5:** per-type cases pin in goldens.
 
 - **Siblings (same recipe, 2026-10-29):** base/English @ `55cf4c4e`
   (G1 1833 nodes, G2 4.7e-6; CPU ~220 ms / CUDA ~15 ms; quality caveat:
