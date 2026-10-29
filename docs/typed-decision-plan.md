@@ -315,10 +315,12 @@ billing softmax(L/1.7601) reproduces the agent's [0.7463, 0.2086,
   drifts 1.5e-3 (td) / 3.9e-3 (base) / 4.3e-3 (multi) with no CPU
   relief — the rerank lesson verbatim — so the fp16 graphs ship as
   CUDA-serving variants (half download/VRAM), not CPU upgrades.
-  Dynamic int8 (ORT, qint8) is **destructive**: drift 2.8–5.4 on the
-  logit scale with a 3/4 argmax flip on base — the −1e4 masked-logit
-  head needs calibration-aware static quant, which needs the eval
-  harness (open route, not hosted). Two converter pitfalls recorded:
+  int8 is **dead on three arms** (td representative): dynamic
+  full-graph drifts 2.8–5.4 with flips; static full-graph (30-input
+  calibration) drifts 9997 — the −1e4 mask sentinel is unquantizable;
+  static **encoder-only** (fp32 head, split verified exact at 0.0)
+  still drifts 2.85 at 2/4 with no CPU speedup (241 vs 234 ms).
+  Not hosted on any checkpoint. Two converter pitfalls recorded:
   `onnx.save_model` appends to an existing `.data` path (delete
   first), and naive all-initializer fp16 casting breaks shape-sensitive
   nodes (use the Cast-inserting converter, not a dtype loop).
