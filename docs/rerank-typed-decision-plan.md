@@ -92,6 +92,12 @@ pub struct TaskSpec {
 > for a ship decision (plus int8 needs its own golden set, not the 1e-6
 > one). NOT listed in the registry; gate on the production-bakeoff
 > question set with a wider rank-parity harness.
+> bf16 (optimum `--dtype bf16` export): KILLED at load — ORT 1.29 rejects
+> the graph on every provider (`Pow` in LayerNorm fed bf16 is a type
+> error; the cast is naive, no op-level keep-list). Harder failure than
+> fp16, and fixing it means custom mixed-precision export surgery for a
+> dtype that couldn't beat fp32 on launch-bound graphs anyway. Not listed,
+> not pursued.
 
 ### A0. Artifact verification (per candidate, before any Rust)
 
