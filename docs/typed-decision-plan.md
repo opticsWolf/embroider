@@ -80,10 +80,12 @@ Mirrors `Reranker` seam-for-seam (deliberately — same reviewers, same
 e2e shape):
 
 ```rust
-pub enum Question { Choice { instructions: String, criteria: Vec<(String, String)> },
-                    Score  { instructions: String, /* … */ },
-                    Noul   { instructions: String, /* … */ } }
-pub struct Decision { pub label: String, pub probabilities: Vec<(String, f32)>, /* … */ }
+// Shipped shape (0.5.0) — the sketch above grew `criteria` into `options`:
+// instructions travel as the prompt suffix (prompt_first=false).
+pub enum Question { Choice { instructions: String, options: Vec<String> },
+                    Score  { instructions: String, options: Vec<String> },
+                    Noul   { instructions: String, options: Vec<String> } } // loud-unsupported
+pub struct Decision { pub label: String, pub probabilities: Vec<(String, f32)> }
 ```
 
 - `open` / `open_files` (explicit tokenizer path — Laya's subfolders and

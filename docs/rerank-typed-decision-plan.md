@@ -69,10 +69,12 @@ decision lives there (§7.2), gated on okfgraph data.
 ## 3. Track B — typed decision (`src/decide.rs`)
 
 **Moved to `docs/typed-decision-plan.md`** (2026-10-29): the consolidated
-typed-decision record — verified contender repos (Laya export + GLiClass-small),
-`Decider` architecture, B0 bakeoff protocol (G0–G5), goldens, rejection log,
-and the reranker-learnings traceability table. Status: B0 in progress, no
-bytes downloaded yet.
+typed-decision record — verified contender repos, `Decider` architecture,
+B0 bakeoff protocol (G0–G5) + execution logs (GLiClass-small G0–G3 done,
+Laya fp16 killed / fp32 hunt / q8 measured), goldens, rejection log,
+dual-access design (classifier + rerank-reduction), external corroboration,
+and the reranker-learnings traceability table. Status: `decide.rs` +
+GLiClass-small spike shipped 0.5.0 on `dev`; Laya + v4-edge bakeoffs queued.
 
 ## 4. Sequencing and releases
 
@@ -82,11 +84,15 @@ bytes downloaded yet.
    logits → goldens → `cache_info` across both arch/tokenizer families.
    Release **0.4.0** (new contract, two fixtures, compat.md rows, okfgraph
    floor-pin coordination).
-3. **Production reranker decision** (A0 bakeoff v2-m3-export vs Qwen3-seq-cls
-   ONNX on okfgraph's language mix) → second registry entry, same 0.4.x
-   mechanics. If the winner needs a new input contract (32K context
-   handling), it takes its own minor.
-4. **Decider bakeoff → `decide.rs`** (B0 + B1 + B2). Release **0.5.0**.
+3. **Production reranker decision** (A0 bakeoff v2-m3-export vs
+   jina-v2-multilingual vs status-quo mMARCO on okfgraph's language mix;
+   Qwen3-seq-cls rejected, reranker-plan §6) → second registry entry,
+   same 0.4.x mechanics. If the winner needs a new input contract (32K
+   context handling), it takes its own minor.
+4. **Decider bakeoff → `decide.rs`** (B0 + B1 + B2) — DONE on `dev`
+   (0.5.0: GLiClass-small spike, goldens, e2e, PyO3). Release **0.5.0**
+   (merge → tag → publish, pending go-ahead; supersedes the 0.4.1
+   release train).
 5. okfgraph-side (out of scope here, listed so it isn't dropped):
    confidence-gated routing (cheap local decide → rerank → LLM/human
    escalation), threshold re-fit harness on held-out labels, regime curves
