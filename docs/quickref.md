@@ -38,7 +38,8 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval",
 # air-gapped: local files only, zero network (both or neither)
 m = JinaV5.open_files("model.onnx", "tokenizer.json")
 
-# what the registry holds (ids, ladders, precisions, vision text_partner)
+# what the registries hold (ids, kind=embed|rerank|decide, ladders,
+# precisions, vision text_partner; task rows leave vector-space keys empty)
 from embroider import available_models
 available_models()
 ```

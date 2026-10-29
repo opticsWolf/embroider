@@ -1,5 +1,5 @@
 # embroider
-### Jina v5 text + image embeddings over ONNX Runtime (Rust core, PyO3)
+### Jina v5 embeddings + cross-encoder rerank over ONNX Runtime (Rust core, PyO3)
 
 [![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
@@ -19,6 +19,7 @@
 - [Runtime: ONNX Runtime discovery](#runtime-onnx-runtime-discovery)
 - [Text embeddings](#text-embeddings)
 - [Vision embeddings](#vision-embeddings)
+- [Rerank](#rerank) — cross-encoder pair scoring (`Reranker`, 0.4.x)
 - [Running without downloads](#running-without-downloads) — tokenizer counts, offline cache checks, local files
 - [Session/threading policy](#sessionthreading-policy-measured)
 - [Failure policy](#failure-policy) · [Contract notes](#contract-notes) · [Conformance](#conformance) · [Testing](#testing)
@@ -28,7 +29,9 @@
 
 `embroider` turns text — and images — into vectors: Jina v5 embeddings
 served through ONNX Runtime from a Rust core, with optional PyO3 bindings
-for Python.
+for Python. Since 0.4.x it also scores them: cross-encoder rerankers
+(`Reranker`) reorder retrieval candidates with pair-encoded logits from
+the same runtime — no second engine, no torch anywhere in the chain.
 
 ### One frozen contract
 
@@ -52,7 +55,7 @@ spaces.
 
 ## Models
 
-Three blessed registry entries (`src/acquire.rs`), all non-commercial
+Three blessed embedding entries (`src/acquire.rs`), all non-commercial
 weights (licences tabled in [docs/compat.md](docs/compat.md)):
 
 | Registry id | Artifact repo | Precisions | Used for |
@@ -60,6 +63,15 @@ weights (licences tabled in [docs/compat.md](docs/compat.md)):
 | `jinaai/jina-embeddings-v5-text-small-retrieval` (default) | itself (fp32) + `opticsWolf/…-onnx-fp16` mirror (fp16) | fp32, fp16 | General text graphs |
 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | itself (in-repo fp32 + fp16 + int8) | fp32, fp16, int8 | Compact graphs; **required text partner** for vision |
 | `jina-v5-omni-nano-retrieval-vision` | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | fp32, fp16 | Image bytes → text-nano space (`text_partner` pinned) |
+
+Plus the task registry (`TaskSpec`, same file) — rerankers, which have
+no vector space and take no `truncate_dim`. The first entries are
+Apache-2.0, the registry's first commercially-usable weights:
+
+| Registry id | Artifact repo | Precisions | Used for |
+|---|---|---|---|
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | itself (`onnx/model.onnx`) | fp32 | Rerank, English |
+| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | itself (`onnx/model.onnx`) | fp32 | Rerank, multilingual (100+ langs) |
 
 ### Custom models
 
@@ -93,11 +105,12 @@ uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
 |---|---|
 | `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application (`apply_providers` = arena on; `apply_providers_with_arena` carries the flag) |
 | `probe` | corrected CUDA availability check (`OnceLock`-cached) |
-| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`) + explicit `SessionPolicy` (`text_embed()` vs `ort_defaults()`) |
-| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`) |
+| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`/`int8`) + explicit `SessionPolicy` (`text_embed()`, `rerank_pair()`, `ort_defaults()`) |
+| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`), embedding registry (`ModelSpec`) + task registry (`TaskSpec`: rerank/decide) |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
 | `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
 | `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
+| `rerank` | `Reranker` — the cross-encoder scoring contract (pair seam + `score_long` windowing) |
 
 The default (pure-Rust) build is Python-free — no `pyo3` in downstream
 trees; the `extension-module` Cargo feature gates the PyO3 bindings and is
@@ -203,6 +216,42 @@ fail-fast beats a hung batch). Sessions use the vision-slot policy
 `arena_extend_strategy=kSameAsRequested`, optional `gpu_mem_limit`
 bytes, CPU arena off. Every encode re-checks `seq == image_tokens +
 15` so a wrong tokenizer fails loudly instead of shifting the space.
+
+## Rerank
+
+Cross-encoder pair scoring: one `(query, document)` forward → one
+relevance logit (higher = more relevant). Same ORT runtime, same session
+policy machinery, no vector space — scores reorder candidates, they never
+enter an index.
+
+`Reranker.open(model_id, revision=None, cache_dir=None, device="auto",
+max_length=None, precision=None, cpu_arena=False)`: `max_length` caps
+pairs at 1..=512 (`None` = the registered ceiling; `.max_len` reports
+the effective limit), `precision` selects weights (`auto`/`fp32`; only
+fp32 tiers are listed until measured — the quant-spike rule, so `auto`
+lands fp32 everywhere today). `score_one(query, doc)` scores a pair;
+`score_many([(q, d), …])` scores a batch in one padded session run
+(order-preserving); `count_tokens(text)` reports true length without
+specials through a truncation-free handle (shared helper with JinaV5).
+
+Truncation is truncate-doc-side-first: the query is never cut to fit the
+document, and a query that alone fills the cap raises instead of scoring
+garbage. The loader feeds `token_type_ids` only when the graph declares
+them (MiniLM 3-input vs mMARCO 2-input, discovered at load) and reads
+the `logits` output. Documents past the pair cap go through
+`score_long(query, doc, window=None, stride=None)` — sliding windows
+with 50%-overlap steps by default and MaxP aggregation (a document is
+relevant if any part answers); chunk planning is weight-free and
+unit-tested, and single-window inputs score exactly like `score_one`
+(e2e-pinned).
+
+Goldens live in `fixtures/golden_rerank_*.json` (ORT 1.29.0 CPU, abs
+1e-6; torch parity 2.9e-6/7.7e-6 at pinned revisions) with the ignored
+`tests/rerank_e2e.rs` asserting them plus per-language relevant-beats-
+irrelevant ordering. Precision notes from the spike: fp16 rejected
+(slower + drift), int8 gated on a wider harness, CUDA opportunistic
+(~1.5x at batch, worse at b1) — see
+docs/[rerank-typed-decision-plan.md](docs/rerank-typed-decision-plan.md).
 
 ## Running without downloads
 
