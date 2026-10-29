@@ -312,7 +312,12 @@ caller-supplied temps would silently fork the calibration.
 `Question`: Choice carries labels with optional descriptions
 (single-label softmax), Score carries ordered LEVELS (one distribution
 over levels — expected value in `.value`, top level in `.label`), Noul
-carries one statement (P(true) — the rerank primitive). Score here is
+carries one statement (P(true) — the rerank primitive). The four
+structural tokens (`[CLS]`/`[SEP]`/`[MASK]`/`[PAD]`) resolve from the
+sibling `tokenizer_config.json` exactly the way HF resolves
+`cls_token_id` — the multilingual checkpoint maps them onto
+`<bos>`/`<eos>`/`<mask>`/`<pad>`, and hardcoding the BERT names
+refused to open it. Score here is
 *not* GLiClass's multi-label sigmoid; the two must never share a
 question type, so `Decider::open` refuses Laya ids (and `LayaDecider`
 refuses non-Laya ids) instead of failing late on the wrong graph.

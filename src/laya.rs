@@ -712,6 +712,32 @@ fn check_laya_limit_for(max_length: Option<usize>, ceiling: usize) -> Result<usi
     }
 }
 
+/// The four structural token strings for a Laya checkpoint: read the
+/// sibling `tokenizer_config.json` (`cls_token`/`sep_token`/`mask_token`/
+/// `pad_token`) exactly the way HF resolves `cls_token_id`, defaulting to
+/// `[CLS]`/`[SEP]`/`[MASK]`/`[PAD]` when the config is absent. The
+/// multilingual checkpoint maps these onto `<bos>`/`<eos>`/`<mask>`/`<pad>`.
+fn laya_special_strings(tokenizer_path: &std::path::Path) -> (String, String, String, String) {
+    let cfg: serde_json::Value = tokenizer_path
+        .parent()
+        .map(|d| d.join("tokenizer_config.json"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let get = |key: &str, fallback: &str| {
+        cfg.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| fallback.to_string())
+    };
+    (
+        get("cls_token", "[CLS]"),
+        get("sep_token", "[SEP]"),
+        get("mask_token", "[MASK]"),
+        get("pad_token", "[PAD]"),
+    )
+}
+
 pub struct LayaDecider {
     session: std::sync::RwLock<ort::session::Session>,
     tokenizer: Tokenizer,
@@ -719,6 +745,11 @@ pub struct LayaDecider {
     sep_id: u32,
     pad_id: u32,
     mask_id: u32,
+    /// The mask token *string* (upstream `tok.mask_token`): states have it
+    /// blanked before encoding, and the head is built with it. Resolved
+    /// from the sibling `tokenizer_config.json` (`mask_token`, default
+    /// `[MASK]`) — the multilingual checkpoint maps it to `<mask>`.
+    mask_str: String,
     max_len: usize,
     head_max_len: usize,
     model_id: String,
@@ -860,11 +891,13 @@ impl LayaDecider {
         }
 
         let tok = load_tokenizer(tokenizer_path, None)?;
-        let cls_id = special_id(&tok, "[CLS]")?;
-        let sep_id = special_id(&tok, "[SEP]")?;
-        let pad_id = special_id(&tok, "[PAD]").unwrap_or(0);
-        let mask_id = special_id(&tok, "[MASK]")
-            .map_err(|_| anyhow!("tokenizer has no [MASK] — the marker layout needs a mask token"))?;
+        let (cls_str, sep_str, mask_str, pad_str) = laya_special_strings(tokenizer_path);
+        let cls_id = special_id(&tok, &cls_str)?;
+        let sep_id = special_id(&tok, &sep_str)?;
+        let pad_id = special_id(&tok, &pad_str).unwrap_or(0);
+        let mask_id = special_id(&tok, &mask_str).map_err(|_| {
+            anyhow!("tokenizer has no {mask_str} — the marker layout needs a mask token")
+        })?;
         let loaded = build_session(onnx_path, device, &SessionPolicy::laya(), cpu_arena)?;
         for need in ["marker_pos", "marker_mask", "qtype"] {
             if !loaded.session.inputs().iter().any(|o| o.name() == need) {
@@ -881,6 +914,7 @@ impl LayaDecider {
             sep_id,
             pad_id,
             mask_id,
+            mask_str,
             max_len: max_length,
             head_max_len,
             model_id: model_id.to_string(),
@@ -963,12 +997,12 @@ impl LayaDecider {
             self.cls_id,
             self.sep_id,
             self.mask_id,
-            "[MASK]",
+            &self.mask_str,
             self.head_max_len,
         )?;
         let state_ids = self
             .tokenizer
-            .encode(state.replace("[MASK]", " ").as_str(), false)
+            .encode(state.replace(&self.mask_str, " ").as_str(), false)
             .map_err(|e| anyhow!("state encode: {e}"))?;
         build_laya_sequence(
             &head_ids,
@@ -1122,7 +1156,7 @@ impl LayaDecider {
         }
         let state_ids = self
             .tokenizer
-            .encode(state.replace("[MASK]", " ").as_str(), false)
+            .encode(state.replace(&self.mask_str, " ").as_str(), false)
             .map_err(|e| anyhow!("state encode: {e}"))?;
         let state_ids = state_ids.get_ids();
         // The room is the tightest question's: windows are one shared
@@ -1136,7 +1170,7 @@ impl LayaDecider {
                 self.cls_id,
                 self.sep_id,
                 self.mask_id,
-                "[MASK]",
+                &self.mask_str,
                 self.head_max_len,
             )?;
             room = room.min(self.max_len.saturating_sub(head_ids.len() + 1));

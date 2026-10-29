@@ -23,6 +23,12 @@ All notable changes to `embroider` are documented here. Format follows
   GLiClass-small on CUDA via `load_dirs`). `load_dirs` added to the
   report (dylib dir + every reported DLL's parent); venv scan falls
   back to the interpreter's own `sys.prefix`; 2 more unit tests.
+- Laya structural tokens resolve from the sibling
+  `tokenizer_config.json` (HF `cls_token_id` semantics) instead of
+  hardcoded `[CLS]`/`[SEP]`/`[MASK]`/`[PAD]`: the multilingual
+  checkpoint maps them onto `<bos>`/`<eos>`/`<mask>`/`<pad>` and
+  previously refused to open. td/base goldens unchanged (same
+  resolution); all three Laya checkpoints benched on CUDA.
 
 ## [0.8.0] — 2026-10-29
 
