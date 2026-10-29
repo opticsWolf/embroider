@@ -226,6 +226,46 @@ torch 2.15 CPU + `trust_remote_code` for the parity reference.
   calibration + thresholds (consumer side); single-label is shippable
   native. Laya and v4-edge bakeoffs unchanged in queue (Laya log below).
 
+## 8b. B0 execution log — v4-edge (2026-10-29)
+
+Pinned revision `885af1af` (Apache-2.0). 1.76 GB `onnx/model.onnx` +
+647 MB official `model_q8.onnx`, DeBERTa-v3-large backbone (~440M —
+"edge is branding, not a size claim").
+
+- **G1: PASS.** 9307 nodes / 414 inits, zero non-standard ops,
+  2-input / 1-output like small-v1.0.
+- **G2: CONDITIONAL PASS.** torch↔ORT max|Δ| **0.028** (10 probes)
+  vs small-v1.0's 3-decimal exactness. Proven recipe-correct, not
+  sloppy: the ONNX embeds the **calibrator** — ORT matches the
+  pipeline's calibrated logits (d=0.021) and mismatches raw
+  `uncalibrated_logits` (d=7.9). The residual is fp32 kernel-order
+  accumulation on a 3x-deeper model; argmax 10/10. Goldens pin the
+  ORT values and the 0.03 tolerance, not 1e-6.
+- **G0: PASS both providers.** CPU ~38 ms/question (slow-tier for
+  routing loops); **CUDA ~2 ms/question** (20 ms/10q batch) —
+  routing-viable. Torch reference needs `.float()` on CPU (weights
+  are BF16, no CPU kernels).
+- **G3: PASS, and it closes the §8 finding.** Multi-label is
+  calibrated now: football→sports 0.96, quantum→technology 0.96
+  (v1.0 claimed quantum=1.0 on *football*), knitting→weather 0.62
+  with honest second-best sports 0.41 (v1.0: ≥0.98 everywhere).
+- **Recipe change recorded: `prompt_first: true`.** v4-edge splices
+  labels-first (`<<LABEL>>* + <<SEP>> + prompt? + text`) where
+  small-v1.0 is text-first. A v4 registry entry needs its own input
+  layout in `decide.rs`, not a parameter flip. Also new: `prompt`
+  (instruction/policy), 2048 ctx, few-shot, hierarchical labels,
+  and a documented rerank recipe (passages × [query]) — the
+  dual-access pattern, upstream-confirmed.
+- **q8: REJECTED.** Official quant drifts **5.5** on the logit
+  scale; argmax survives 10/10 on easy probes but the probabilities
+  (the contract) are garbage. Same verdict as Laya int8, third
+  confirmation that quant needs the harness, not armchair.
+
+Standing: v4-edge is the better *model* (calibrated, instruction-
+ following); small-v1.0 is the shipped *spike* (simpler layout,
+ already golden-pinned). Both can coexist as registry entries; the
+ v4 layout is B1 follow-up work.
+
 ## 9. B0 execution log — Laya (2026-10-29, via gossamer)
 
 Goal refinement: one weights family, two contracts — Laya as classifier
