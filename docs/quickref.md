@@ -140,6 +140,9 @@ d.decide("The football match ended 2-1.", [("choice", "", ["sports", "cooking"])
 d.decide(state, [("score", "", options)])   # sigmoid per option, native unthresholded
 # d.decide(state, [("noul", "", options)])  → RuntimeError: no registered model serves Noul
 
+d4 = Decider.open("knowledgator/gliclass-v4-edge")   # labels-first layout, prompts, 2048 ctx
+d4.decide(state, [("choice", "Apply the refund policy.", ["approved", "denied", "escalate"])])
+
 d.count_tokens(state)   # true length, no specials
 ```
 

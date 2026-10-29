@@ -3,6 +3,27 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.6.0] — 2026-10-29
+
+### Added
+- Labels-first decide layout + second registry entry
+  (`knowledgator/gliclass-v4-edge`, 440M, Apache-2.0, fp32-only):
+  `TaskSpec.prompt_first` records the input order per model
+  (`open()` resolves it, `open_files` takes it caller-side with no
+  silent default) and `decide_many` assembles
+  `[CLS] + labels + [SEP] + prompt? + state + [SEP]` when set
+  (truncate-state-side-first unchanged — the state keeps its head in
+  both layouts). v4 brings instruction prompts, 2048-token ceiling,
+  and an embedded held-out-fitted calibrator (multi-label is
+  decision-ready: the small-v1.0 over-confidence finding does not
+  reproduce). Golden `fixtures/golden_decide_gliclass_v4edge.json`
+  (ORT 1.29.0 CPU, 6 cases incl. prompt + single-option relevance
+  probes, abs 0.03, exact-match labels — torch Δ 0.028 on the
+  calibrated branch at pinned revision `885af1af`) + v4 gates in
+  `tests/decide_e2e.rs` (layout proof for the labels-first recipe).
+  The in-repo `model_q8.onnx` was measured and rejected (Δ 5.5 on
+  the logit scale — same rule as every other quant).
+
 ## [0.5.0] — 2026-10-29
 
 ### Added

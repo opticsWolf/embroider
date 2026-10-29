@@ -1,0 +1,127 @@
+{
+ "contract": "decide-gliclass",
+ "model": "knowledgator/gliclass-v4-edge",
+ "revision": "885af1af",
+ "provenance": "onnxruntime 1.29.0 CPU; truncate-state-side-first max_length=2048 (labels-first: (<<LABEL>>option)* + <<SEP>> + instructions + state); torch parity max|D|=0.028 on 10 probes vs calibrated branch (gliclass 0.1.21 fp32-cast, torch 2.10, same revision); goldens pin ORT values at 0.03 tolerance",
+ "max_length": 2048,
+ "token_counts": {
+  "sport_single": 11,
+  "vote_single": 9,
+  "quantum_score": 8,
+  "knit_score": 6,
+  "refund_prompt": 16,
+  "nano_relevance": 12
+ },
+ "cases": [
+  {
+   "key": "sport_single",
+   "kind": "choice",
+   "state": "The football match ended 2-1 after extra time.",
+   "options": [
+    "sports",
+    "cooking",
+    "quantum physics",
+    "knitting"
+   ],
+   "instructions": "",
+   "label": "sports",
+   "probs": [
+    0.99943,
+    0.000105,
+    0.000372,
+    9.2e-05
+   ]
+  },
+  {
+   "key": "vote_single",
+   "kind": "choice",
+   "state": "The election results will be announced at midnight.",
+   "options": [
+    "sports",
+    "politics",
+    "cooking",
+    "weather"
+   ],
+   "instructions": "",
+   "label": "politics",
+   "probs": [
+    0.002343,
+    0.994011,
+    0.00038,
+    0.003266
+   ]
+  },
+  {
+   "key": "quantum_score",
+   "kind": "score",
+   "state": "The quantum computer solved the optimization problem.",
+   "options": [
+    "sports",
+    "cooking",
+    "politics",
+    "technology",
+    "weather"
+   ],
+   "instructions": "",
+   "label": "technology",
+   "probs": [
+    0.003497,
+    0.00191,
+    0.003163,
+    0.95635,
+    0.004576
+   ]
+  },
+  {
+   "key": "knit_score",
+   "kind": "score",
+   "state": "Knitting patterns for winter scarves.",
+   "options": [
+    "sports",
+    "cooking",
+    "politics",
+    "technology",
+    "weather"
+   ],
+   "instructions": "",
+   "label": "weather",
+   "probs": [
+    0.400478,
+    0.186566,
+    0.0118,
+    0.057656,
+    0.626848
+   ]
+  },
+  {
+   "key": "refund_prompt",
+   "kind": "choice",
+   "state": "Our refund window is 30 days. The customer bought the item 45 days ago.",
+   "options": [
+    "refund approved",
+    "refund denied",
+    "escalate to a human"
+   ],
+   "instructions": "Apply the refund policy to the customer's request.",
+   "label": "refund denied",
+   "probs": [
+    0.038288,
+    0.952171,
+    0.009541
+   ]
+  },
+  {
+   "key": "nano_relevance",
+   "kind": "score",
+   "state": "Hold the reset button for 10 seconds to restore factory settings.",
+   "options": [
+    "relevant"
+   ],
+   "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+   "label": "relevant",
+   "probs": [
+    0.366128
+   ]
+  }
+ ]
+}

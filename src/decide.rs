@@ -125,6 +125,7 @@ pub struct Decider {
     pad_id: u32,
     max_len: usize,
     model_id: String,
+    prompt_first: bool,
     used_cuda: bool,
     precision: Precision,
     feed_token_type_ids: bool,
@@ -150,6 +151,25 @@ pub(crate) fn build_sequence(
     out.push(cls_id);
     out.extend_from_slice(state_ids);
     out.extend_from_slice(label_ids);
+    out.push(sep_id);
+    out
+}
+
+/// Labels-first variant (`prompt_first: true` — the v4-edge recipe):
+/// `[CLS] + label-block + state + [SEP]`. The label block (options +
+/// SEP + instructions) is built identically; only its position moves.
+/// Truncation discipline is unchanged: the state keeps its head in
+/// both layouts, the question is never cut.
+pub(crate) fn build_sequence_labels_first(
+    label_ids: &[u32],
+    state_ids: &[u32],
+    cls_id: u32,
+    sep_id: u32,
+) -> Vec<u32> {
+    let mut out = Vec::with_capacity(state_ids.len() + label_ids.len() + 2);
+    out.push(cls_id);
+    out.extend_from_slice(label_ids);
+    out.extend_from_slice(state_ids);
     out.push(sep_id);
     out
 }
@@ -219,18 +239,25 @@ impl Decider {
         // ---- tokenizer (no truncation policy — truncation is manual,
         // state-side-first, per call) ----
         let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
-        Self::from_files(&onnx_path, &tok_path, model_id, device, max_length, precision, cpu_arena)
+        // Registry layout; unknown ids take the text-first standard.
+        let prompt_first = lookup_task(model_id).map(|s| s.prompt_first).unwrap_or(false);
+        Self::from_files(&onnx_path, &tok_path, model_id, device, max_length, prompt_first, precision, cpu_arena)
     }
 
     /// Load from explicit local files — no network access. An external-data
     /// sidecar must sit next to `onnx_path` (ORT resolves it relative to the
     /// model file). Missing files fail before any tokenizer or session work;
-    /// precision reads `fp32` (the files are what they are).
+    /// precision reads `fp32` (the files are what they are). Explicit
+    /// files carry no registry metadata, so the input layout is
+    /// caller-specified: false = text-first (small-v1.0 recipe), true =
+    /// labels-first (v4-edge recipe) — a wrong layout scores garbage at
+    /// parity, never an error, so there is no silent default to inherit.
     pub fn open_files(
         onnx_path: &Path,
         tokenizer_path: &Path,
         device: DeviceReq,
         max_length: Option<usize>,
+        prompt_first: bool,
         cpu_arena: bool,
     ) -> Result<Self> {
         let max_length = match max_length {
@@ -248,6 +275,7 @@ impl Decider {
             &onnx_path.display().to_string(),
             device,
             max_length,
+            prompt_first,
             Precision::Fp32,
             cpu_arena,
         )
@@ -260,6 +288,7 @@ impl Decider {
         model_id: &str,
         device: DeviceReq,
         max_length: usize,
+        prompt_first: bool,
         precision: Precision,
         cpu_arena: bool,
     ) -> Result<Self> {
@@ -286,6 +315,7 @@ impl Decider {
             pad_id,
             max_len: max_length,
             model_id: model_id.to_string(),
+            prompt_first,
             used_cuda: loaded.used_cuda,
             precision,
             feed_token_type_ids: loaded.feed_token_type_ids,
@@ -349,12 +379,17 @@ impl Decider {
                 label_ids.len(),
                 self.max_len,
             )?;
-            seqs.push(build_sequence(
-                &state_ids.get_ids()[..keep],
-                label_ids.get_ids(),
-                self.cls_id,
-                self.sep_id,
-            ));
+            let state_keep = &state_ids.get_ids()[..keep];
+            seqs.push(if self.prompt_first {
+                build_sequence_labels_first(
+                    label_ids.get_ids(),
+                    state_keep,
+                    self.cls_id,
+                    self.sep_id,
+                )
+            } else {
+                build_sequence(state_keep, label_ids.get_ids(), self.cls_id, self.sep_id)
+            });
             counts.push(q.options().len());
         }
         let t = seqs.iter().map(|s| s.len()).max().unwrap_or(0);
@@ -460,6 +495,13 @@ impl Decider {
         self.max_len
     }
 
+    /// Input layout: false = text-first (small-v1.0 recipe), true =
+    /// labels-first (v4-edge recipe). Resolved from the task registry;
+    /// explicit files default to text-first.
+    pub fn prompt_first(&self) -> bool {
+        self.prompt_first
+    }
+
     /// Model id — or the ONNX path when opened via `open_files`.
     pub fn model_id(&self) -> &str {
         &self.model_id
@@ -517,6 +559,22 @@ mod tests {
     }
 
     #[test]
+    fn build_sequence_labels_first_layout() {
+        // [CLS] + labels + state + [SEP] — the v4-edge recipe order.
+        assert_eq!(build_sequence_labels_first(&[21, 22], &[11, 12], 101, 102), vec![101, 21, 22, 11, 12, 102]);
+        assert_eq!(build_sequence_labels_first(&[21], &[], 101, 102), vec![101, 21, 102]);
+    }
+
+    #[test]
+    fn task_registry_carries_layout() {
+        use crate::acquire::{GLICLASS_SMALL_MODEL, GLICLASS_V4_EDGE_MODEL};
+        assert!(!lookup_task(GLICLASS_SMALL_MODEL).unwrap().prompt_first);
+        let v4 = lookup_task(GLICLASS_V4_EDGE_MODEL).unwrap();
+        assert!(v4.prompt_first);
+        assert_eq!(v4.max_tokens, 2048);
+    }
+
+    #[test]
     fn truncate_state_keeps_short_states_whole() {
         assert_eq!(truncate_state_to(10, 20, 512).unwrap(), 10);
         assert_eq!(truncate_state_to(400, 20, 512).unwrap(), 400);
@@ -540,6 +598,7 @@ mod tests {
             DeviceReq::Cpu,
             None,
             false,
+            false,
         )
         .err()
         .expect("open_files should fail")
@@ -555,6 +614,7 @@ mod tests {
                 Path::new("/nonexistent/tokenizer.json"),
                 DeviceReq::Cpu,
                 bad,
+                false,
                 false,
             )
             .err()

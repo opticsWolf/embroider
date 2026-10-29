@@ -403,12 +403,13 @@ impl PyDecider {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (onnx_path, tokenizer_path, device="auto", max_length=None, cpu_arena=false))]
+    #[pyo3(signature = (onnx_path, tokenizer_path, device="auto", max_length=None, prompt_first=false, cpu_arena=false))]
     fn open_files(
         onnx_path: &str,
         tokenizer_path: &str,
         device: &str,
         max_length: Option<usize>,
+        prompt_first: bool,
         cpu_arena: bool,
     ) -> PyResult<Self> {
         let inner = Decider::open_files(
@@ -417,6 +418,7 @@ impl PyDecider {
             DeviceReq::parse(device)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
             max_length,
+            prompt_first,
             cpu_arena,
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;

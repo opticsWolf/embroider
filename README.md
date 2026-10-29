@@ -273,16 +273,22 @@ at 1.0 on a football text). `Question::Noul` is declared but
 loud-unsupported — no registered model serves none-of-the-above, so it
 errors instead of degrading into a threshold nobody fitted.
 
-Input construction is contract, pinned like the rerank pair seam:
-`state + (<<LABEL>>option)* + <<SEP>> + instructions`
-(`prompt_first=false`), truncate-state-side-first with manual id
-concatenation (the pair-tokenizer `OnlySecond` pattern would cut the
-wrong side). Temperature is identity — the model ships no fitted temps.
-Goldens live in `fixtures/golden_decide_gliclass_small.json` (ORT 1.29.0
-CPU, abs 1e-6 on probs, exact-match labels, torch exact on 8 B0 probes)
-with the ignored `tests/decide_e2e.rs` asserting them plus the layout
-proof (Rust-built ids equal a single recipe encode). GLiClass-small is
-the seam-proving spike; Laya (native typed questions) and v4-edge stay
+Input construction is contract, pinned like the rerank pair seam.
+Small-v1.0 is text-first: `state + (<<LABEL>>option)* + <<SEP>> +
+instructions` (`prompt_first=false`); v4-edge is labels-first:
+`(<<LABEL>>option)* + <<SEP>> + instructions + state`
+(`prompt_first=true`, recorded per model in the registry — `open()`
+resolves it, `open_files` takes it caller-side). Truncate-state-side-first
+with manual id concatenation in both layouts (the pair-tokenizer
+`OnlySecond` pattern would cut the wrong side). Temperature is identity
+— neither model ships fitted temps (v4's calibration lives in its
+graph). Goldens live in `fixtures/golden_decide_gliclass_{small,v4edge}.json`
+(ORT 1.29.0 CPU; small abs 1e-6, v4 abs 0.03 — the embedded calibrator
+accumulates kernel-order drift; exact-match labels, torch exact / Δ
+0.028 on the B0 probes) with the ignored `tests/decide_e2e.rs`
+asserting them plus the layout proof per recipe. GLiClass-small is
+the seam-proving spike; v4-edge is the better model (calibrated,
+instruction prompts); Laya (native typed questions) stays
 queued in docs/[typed-decision-plan.md](docs/typed-decision-plan.md).
 
 ## Running without downloads

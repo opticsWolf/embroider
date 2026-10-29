@@ -42,6 +42,7 @@ pub const RERANK_MMARCO_MODEL: &str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v
 /// small-v1.0, lowercased canonical id. Uni-encoder labels-spliced input
 /// through the same `open_files` seam as the rerank spikes.
 pub const GLICLASS_SMALL_MODEL: &str = "knowledgator/gliclass-small-v1.0";
+pub const GLICLASS_V4_EDGE_MODEL: &str = "knowledgator/gliclass-v4-edge";
 
 /// One downloadable artifact: the repo holding it plus the model file
 /// inside that repo. The external-data sidecar is derived (same stem +
@@ -180,6 +181,11 @@ pub struct TaskSpec {
     pub id: &'static str,
     pub kind: TaskKind,
     pub max_tokens: usize,
+    /// Input layout: false = text-first (`state + labels + [SEP]`,
+    /// small-v1.0 recipe), true = labels-first (`labels + [SEP] +
+    /// prompt? + state`, v4-edge recipe). Part of the contract — a
+    /// wrong layout scores garbage at parity, never an error.
+    pub prompt_first: bool,
     pub fp32: Artifact<'static>,
     pub fp16: Option<Artifact<'static>>,
     pub int8: Option<Artifact<'static>>,
@@ -192,6 +198,7 @@ pub const RERANK_MINILM: TaskSpec = TaskSpec {
     id: RERANK_MINILM_MODEL,
     kind: TaskKind::Rerank,
     max_tokens: 512,
+    prompt_first: false,
     fp32: Artifact { repo: RERANK_MINILM_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
@@ -205,6 +212,7 @@ pub const RERANK_MMARCO: TaskSpec = TaskSpec {
     id: RERANK_MMARCO_MODEL,
     kind: TaskKind::Rerank,
     max_tokens: 512,
+    prompt_first: false,
     fp32: Artifact { repo: RERANK_MMARCO_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
@@ -220,7 +228,28 @@ pub const GLICLASS_SMALL: TaskSpec = TaskSpec {
     id: GLICLASS_SMALL_MODEL,
     kind: TaskKind::Decide,
     max_tokens: 512,
+    prompt_first: false,
     fp32: Artifact { repo: GLICLASS_SMALL_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp16: None,
+    int8: None,
+};
+
+/// Decide, English single/multi-label + instruction prompts (plan
+/// §8b): GLiClass v4-edge, 440M, DeBERTa-v3-class encoder. Labels-first
+/// recipe (`prompt_first: true` — labels + SEP + prompt + text, the
+/// v4 training order), 2048-token ceiling per the model card's usage,
+/// in-repo ONNX (`onnx/model.onnx`) + root `tokenizer.json` at pinned
+/// revision `885af1af`; fp32 only (the in-repo q8 drifts 5.5 on the
+/// logit scale — rejected, same rule as every other quant). The graph
+/// embeds the held-out-fitted calibrator (B0-proven: ORT matches the
+/// calibrated branch, mismatches raw by 7.9), so goldens pin ORT
+/// values at a 0.03 tolerance, not 1e-6.
+pub const GLICLASS_V4_EDGE: TaskSpec = TaskSpec {
+    id: GLICLASS_V4_EDGE_MODEL,
+    kind: TaskKind::Decide,
+    max_tokens: 2048,
+    prompt_first: true,
+    fp32: Artifact { repo: GLICLASS_V4_EDGE_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
 };
@@ -228,7 +257,7 @@ pub const GLICLASS_SMALL: TaskSpec = TaskSpec {
 /// Builtin task registry. Adding entries never moves existing graphs —
 /// different models, different outputs, no shared vector space.
 pub fn builtin_tasks() -> &'static [TaskSpec] {
-    &[RERANK_MINILM, RERANK_MMARCO, GLICLASS_SMALL]
+    &[RERANK_MINILM, RERANK_MMARCO, GLICLASS_SMALL, GLICLASS_V4_EDGE]
 }
 
 /// Look up a canonical id in the task registry. Unknown ids return

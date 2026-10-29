@@ -59,6 +59,16 @@ Rules:
   abs 1e-6 on probs, exact-match labels) + ignored
   `tests/decide_e2e.rs`, same gates as rerank (incl. the layout proof:
   Rust-built ids equal a single recipe encode).
+- **Decider labels-first layout (0.6.0)**: `TaskSpec.prompt_first` +
+  `Decider::prompt_first` — `open()` resolves it from the registry,
+  `open_files` takes it caller-side (explicit files carry no registry
+  metadata, so a wrong layout would score garbage, never an error).
+  Second registry entry: `knowledgator/gliclass-v4-edge` (440M,
+  Apache-2.0, labels-first recipe `labels + [SEP] + prompt? + state`,
+  2048 ceiling, fp32 only — the in-repo q8 drifts 5.5 and is
+  rejected). Its graph embeds the held-out-fitted calibrator, so its
+  golden (`fixtures/golden_decide_gliclass_v4edge.json`, ORT 1.29.0
+  CPU) pins ORT values at a 0.03 tolerance, not 1e-6.
 - **Task registry (0.3.4)**: `acquire::{TaskSpec, TaskKind, builtin_tasks,
   lookup_task, artifact_for_task}` — the non-embedding sibling of
   `ModelSpec` (no `native_dim`/`ladder`; scores and decisions have no
@@ -89,6 +99,7 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank, English; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 2.9e-6) |
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank, multilingual; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 7.7e-6) |
 | `knowledgator/gliclass-small-v1.0` fp32 | `knowledgator/gliclass-small-v1.0` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch exact on 8 B0 probes) |
+| `knowledgator/gliclass-v4-edge` fp32 | `knowledgator/gliclass-v4-edge` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label + instruction prompts, labels-first layout; upstream repo referenced, never mirrored; CPU parity ≤0.03 vs goldens — the graph embeds the calibrator, torch Δ 0.028 on the calibrated branch; in-repo q8 rejected at Δ 5.5) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence

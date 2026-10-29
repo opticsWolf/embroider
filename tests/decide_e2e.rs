@@ -1,15 +1,20 @@
 //! End-to-end decide parity: `Decider::open_files` (Rust input
-//! construction + ORT session) vs the vendored goldens from the B0 spike.
+//! construction + ORT session) vs the vendored goldens.
 //!
 //! Ignored by default: needs an ONNX Runtime dylib and the weight files.
 //! Run: `cargo test --offline --test decide_e2e -- --ignored` with:
 //! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.29.x, the pinned runtime)
-//! - `DECIDE_E2E_ONNX` → GLiClass-small `onnx/model.onnx`
-//! - `DECIDE_E2E_TOK` → GLiClass-small `tokenizer.json`
+//! - small-v1.0: `DECIDE_E2E_ONNX` → `onnx/model.onnx`,
+//!   `DECIDE_E2E_TOK` → `tokenizer.json`
+//! - v4-edge: `DECIDE_E2E_V4_ONNX` → `onnx/model.onnx`,
+//!   `DECIDE_E2E_V4_TOK` → `tokenizer.json`
 //!
-//! Gates (the B0 bar): abs diff ≤ 1e-6 per golden probability, exact-match
+//! Gates: per-golden probabilities within tolerance (1e-6 small-v1.0,
+//! 0.03 v4-edge — the embedded calibrator accumulates fp32 kernel-order
+//! drift vs torch, so v4 pins ORT values, not torch parity), exact-match
 //! labels, Rust-built input ids equal to a single recipe encode (the
-//! layout contract), and choice winners outranking every loser.
+//! layout contract — text-first for small, labels-first for v4), and
+//! choice winners outranking every loser.
 
 use embroider::{Decider, DeviceReq, Question};
 use serde_json::Value;
@@ -19,15 +24,17 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn check(onnx: &str, tok: &str, fixture: &str) {
+fn check(onnx: &str, tok: &str, fixture: &str, tol: f64, prompt_first: bool, cap: usize) {
     let d = Decider::open_files(
         Path::new(onnx),
         Path::new(tok),
         DeviceReq::Cpu,
         None,
+        prompt_first,
         false,
     )
     .expect("open_files");
+    assert_eq!(d.prompt_first(), prompt_first, "caller layout");
     let text =
         std::fs::read_to_string(fixture).expect("golden fixture readable");
     let fx: Value = serde_json::from_str(&text).expect("fixture parses");
@@ -50,12 +57,20 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
                 .iter()
                 .map(|o| o.as_str().expect("option").to_string())
                 .collect();
+            let instructions = c
+                .get("instructions")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let q = match kind {
-                "choice" => Question::Choice { instructions: String::new(), options },
-                _ => Question::Score { instructions: String::new(), options },
+                "choice" => Question::Choice { instructions, options },
+                _ => Question::Score { instructions, options },
             };
             items.push((c["state"].as_str().expect("state").to_string(), q));
             keys.push(c["key"].as_str().expect("key"));
+        }
+        if items.is_empty() {
+            continue;
         }
         let refs: Vec<(&str, &Question)> =
             items.iter().map(|(s, q)| (s.as_str(), q)).collect();
@@ -74,7 +89,7 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
             for (j, (opt, p)) in got[i].probabilities.iter().enumerate() {
                 assert_eq!(opt, &c["options"][j].as_str().expect("option"), "{k} order");
                 let dd = (*p as f64 - want[j]).abs();
-                assert!(dd <= 1e-6, "{k}[{opt}]: got {p} want {} (|Δ|={dd})", want[j]);
+                assert!(dd <= tol, "{k}[{opt}]: got {p} want {} (|Δ|={dd})", want[j]);
             }
         }
         // Semantic pin, not just numeric: the winner outranks every loser.
@@ -87,7 +102,7 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
 
     // Layout contract: the Rust-built ids equal a single recipe encode
     // through the same tokenizer (truncate-state-side-first is a no-op
-    // here — all six cases fit the cap, so equality is exact).
+    // here — all cases fit the cap, so equality is exact).
     let rt = tokenizers::Tokenizer::from_file(tok).expect("tokenizer loads");
     let c = &cases[0];
     let state = c["state"].as_str().expect("state");
@@ -97,11 +112,17 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
         .iter()
         .map(|o| o.as_str().expect("option").to_string())
         .collect();
+    let instructions = c.get("instructions").and_then(|v| v.as_str()).unwrap_or("");
     let label_text = format!(
-        "{}<<SEP>>",
-        options.iter().map(|o| format!("<<LABEL>>{o}")).collect::<String>()
+        "{}{}",
+        options.iter().map(|o| format!("<<LABEL>>{o}")).collect::<String>(),
+        format!("<<SEP>>{instructions}")
     );
-    let recipe_seq = format!("{state}{label_text}");
+    let recipe_seq = if prompt_first {
+        format!("{label_text}{state}")
+    } else {
+        format!("{state}{label_text}")
+    };
     let recipe = rt.encode(recipe_seq.as_str(), true).expect("recipe encode");
     // Rebuild through the public seam: decide returns no ids, so compare
     // against the documented construction — the count pins the state side.
@@ -115,7 +136,7 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
         );
     }
     // The recipe encode fits the cap whole (no truncation engaged).
-    assert!(recipe.len() <= 512, "recipe len {}", recipe.len());
+    assert!(recipe.len() <= cap, "recipe len {}", recipe.len());
     // Specials present exactly once each at the boundaries.
     let ids = recipe.get_ids();
     assert_eq!(ids.first(), Some(&rt.token_to_id("[CLS]").expect("cls")));
@@ -136,7 +157,7 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
     assert!(e.contains("at least one option"), "{e}");
     // Over-long options (alone filling the cap) fail instead of cutting
     // the question to fit the state.
-    let big: Vec<String> = (0..600).map(|i| format!("option{i}")).collect();
+    let big: Vec<String> = (0..cap).map(|i| format!("option{i}")).collect();
     let e = d
         .decide(
             "short state",
@@ -152,8 +173,18 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
 #[ignore]
 fn decide_e2e_parity_vs_goldens() {
     if let (Some(onnx), Some(tok)) = (env("DECIDE_E2E_ONNX"), env("DECIDE_E2E_TOK")) {
-        check(&onnx, &tok, "fixtures/golden_decide_gliclass_small.json");
+        check(&onnx, &tok, "fixtures/golden_decide_gliclass_small.json", 1e-6, false, 512);
     } else {
         eprintln!("decide e2e skipped: set DECIDE_E2E_ONNX/DECIDE_E2E_TOK");
+    }
+}
+
+#[test]
+#[ignore]
+fn decide_e2e_v4_parity_vs_goldens() {
+    if let (Some(onnx), Some(tok)) = (env("DECIDE_E2E_V4_ONNX"), env("DECIDE_E2E_V4_TOK")) {
+        check(&onnx, &tok, "fixtures/golden_decide_gliclass_v4edge.json", 0.03, true, 2048);
+    } else {
+        eprintln!("decide v4 e2e skipped: set DECIDE_E2E_V4_ONNX/DECIDE_E2E_V4_TOK");
     }
 }
