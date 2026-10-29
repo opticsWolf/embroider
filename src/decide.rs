@@ -16,10 +16,10 @@
 //! the question and are never cut to fit the state.
 
 use crate::acquire::{
-    artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name,
+    artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name, TaskKind,
 };
 use crate::error::{oe, Result};
-use crate::jina::{build_session, count_tokens_in, load_tokenizer};
+use crate::jina::{build_session, count_tokens_in, load_tokenizer, special_id};
 use crate::policy::{resolve_provider_names, DeviceReq, Precision, SessionPolicy};
 use anyhow::anyhow;
 use ndarray::Array2;
@@ -132,11 +132,7 @@ pub struct Decider {
     output_name: String,
 }
 
-fn special_id(tokenizer: &tokenizers::Tokenizer, token: &str) -> Result<u32> {
-    tokenizer.token_to_id(token).ok_or_else(|| {
-        anyhow!("GLiClass tokenizer lacks required special token '{token}'")
-    })
-}
+
 
 /// Assemble one input sequence: `[CLS] + state + label-block + [SEP]`.
 /// Pure function — the layout half of the contract, layout-pinned by the
@@ -203,6 +199,14 @@ impl Decider {
     ) -> Result<Self> {
         // Per-model contract: registered ids validate against their own
         // ceiling; unknown ids fall back to the decide standard.
+        // Marker-layout checkpoints are refused with a pointer — feeding
+        // a Laya graph to the 2-input GLiClass path would fail late and
+        // loud instead of routing to the right type now.
+        if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::DecideLaya) {
+            return Err(anyhow!(
+                "'{model_id}' is a marker-layout Laya checkpoint, served by LayaDecider — Decider serves the GLiClass-layout tasks only"
+            ));
+        }
         let ceiling =
             lookup_task(model_id).map(|s| s.max_tokens).unwrap_or(DECIDE_DEFAULT_MAX);
         let max_length = check_decide_limit_for(max_length, ceiling)?;

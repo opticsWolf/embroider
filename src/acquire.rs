@@ -160,6 +160,10 @@ pub fn lookup_model(model_id: &str) -> Option<ModelSpec> {
 pub enum TaskKind {
     Rerank,
     Decide,
+    /// Marker-layout typed decisions (Laya): same question shapes as
+    /// `Decide`, different input contract (marker positions, not label
+    /// text) — served by `LayaDecider`, refused by `Decider`.
+    DecideLaya,
 }
 
 impl TaskKind {
@@ -167,6 +171,7 @@ impl TaskKind {
         match self {
             TaskKind::Rerank => "rerank",
             TaskKind::Decide => "decide",
+            TaskKind::DecideLaya => "decide-laya",
         }
     }
 }
@@ -254,10 +259,92 @@ pub const GLICLASS_V4_EDGE: TaskSpec = TaskSpec {
     int8: None,
 };
 
+/// Laya checkpoints (plan §9b): native typed questions (choice with
+/// descriptions, level-scores, noul) over the marker layout. Canonical
+/// ids are upstream (`convaiinnovations/laya-*`); the fp32 artifacts are
+/// the `opticsWolf/laya-*-fp32-onnx` self-exports (upstream ships no
+/// ONNX — torch `dynamo=True`, opset 18, explicit dynamic dims
+/// batch/seq≤1024/k≤256). Served by `LayaDecider` (`src/laya.rs`);
+/// `prompt_first` is the GLiClass-layout axis and does not apply (the
+/// marker layout is intrinsic). fp32 only — fp16 measured (drifts
+/// 1.5–4.3e-3, CUDA-only relief) and wires up as a serving variant on
+/// its own parity gate; int8 rejected on three arms (dynamic 2.8–5.4
+/// with flips, static 9997 on the −1e4 mask sentinel, encoder-only
+/// still 2.85 with no CPU speedup).
+///
+/// - typed-decisions @ `1a793eb` (421M ModernBERT-large, max_len 1024 /
+///   head 256, fitted per-bucket temps): the classifier-duty checkpoint.
+/// - base English @ `55cf4c4e` (512/192): near-chance zero-shot per
+///   Ollaya — export faithful, not for classifier duty.
+/// - multilingual @ `e4e9ddf2` (mmBERT-base, 1024/256): fastest on CPU.
+
+/// Upstream id: the typed-decisions checkpoint (classifier duty).
+pub const LAYA_TD_MODEL: &str = "convaiinnovations/laya-typed-decisions";
+/// Upstream id: the base English checkpoint.
+pub const LAYA_BASE_MODEL: &str = "convaiinnovations/laya";
+/// Upstream id: the multilingual checkpoint.
+pub const LAYA_MULTI_MODEL: &str = "convaiinnovations/laya-multilingual";
+
+/// Traced sequence bound all three Laya exports bake in (dynamicDims
+/// seq≤1024): explicit `max_length` can never exceed it.
+pub const LAYA_ABSOLUTE_MAX: usize = 1024;
+/// `open_files` default ceiling (registry ids resolve their own).
+pub const LAYA_DEFAULT_MAX: usize = 1024;
+
+pub const LAYA_TD: TaskSpec = TaskSpec {
+    id: LAYA_TD_MODEL,
+    kind: TaskKind::DecideLaya,
+    max_tokens: 1024,
+    prompt_first: false,
+    fp32: Artifact {
+        repo: "opticsWolf/laya-typed-decisions-fp32-onnx",
+        file: "laya-td-fp32.onnx",
+        sidecar: Some("laya-td-fp32.onnx.data"),
+    },
+    fp16: None,
+    int8: None,
+};
+
+pub const LAYA_BASE: TaskSpec = TaskSpec {
+    id: LAYA_BASE_MODEL,
+    kind: TaskKind::DecideLaya,
+    max_tokens: 512,
+    prompt_first: false,
+    fp32: Artifact {
+        repo: "opticsWolf/laya-english-fp32-onnx",
+        file: "laya-base-fp32.onnx",
+        sidecar: Some("laya-base-fp32.onnx.data"),
+    },
+    fp16: None,
+    int8: None,
+};
+
+pub const LAYA_MULTI: TaskSpec = TaskSpec {
+    id: LAYA_MULTI_MODEL,
+    kind: TaskKind::DecideLaya,
+    max_tokens: 1024,
+    prompt_first: false,
+    fp32: Artifact {
+        repo: "opticsWolf/laya-multilingual-fp32-onnx",
+        file: "laya-multi-fp32.onnx",
+        sidecar: Some("laya-multi-fp32.onnx.data"),
+    },
+    fp16: None,
+    int8: None,
+};
+
 /// Builtin task registry. Adding entries never moves existing graphs —
 /// different models, different outputs, no shared vector space.
 pub fn builtin_tasks() -> &'static [TaskSpec] {
-    &[RERANK_MINILM, RERANK_MMARCO, GLICLASS_SMALL, GLICLASS_V4_EDGE]
+    &[
+        RERANK_MINILM,
+        RERANK_MMARCO,
+        GLICLASS_SMALL,
+        GLICLASS_V4_EDGE,
+        LAYA_TD,
+        LAYA_BASE,
+        LAYA_MULTI,
+    ]
 }
 
 /// Look up a canonical id in the task registry. Unknown ids return
@@ -485,18 +572,42 @@ pub fn cache_info(
     }
 
     let sidecar = artifact.sidecar();
-    let mut files: Vec<(&str, bool)> = Vec::with_capacity(3);
+    let mut files: Vec<(&str, bool)> = Vec::with_capacity(4);
     files.push((artifact.file, true));
     if let Some(sc) = sidecar.as_deref() {
         files.push((sc, false));
     }
     files.push(("tokenizer.json", true));
+    // Marker-layout checkpoints carry their ceilings + calibration in
+    // the config; LayaDecider refuses to open without it.
+    if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::DecideLaya) {
+        files.push(("rl_agent_config.json", true));
+    }
     let mut rep = cache_info_files(artifact.repo, &files, revision, cache_dir)?;
     // The generic core echoes the repo; the registry surface reports the
     // id as passed plus its resolved tier.
     rep.model_id = model_id.to_string();
     rep.precision = Some(precision);
     Ok(rep)
+}
+
+/// Fetch one named file from any repo — the general acquisition path
+/// (`tokenizer.json` and `rl_agent_config.json` ride it; the graph
+/// itself rides the artifact downloader in each `open`).
+pub fn fetch_repo_file(
+    repo_id: &str,
+    filename: &str,
+    revision: Option<&str>,
+    cache_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
+    let (owner, name) = parse_owner_name(repo_id)?;
+    let client = hf_client(cache_dir)?;
+    let repo = client.model(owner, name);
+    repo.download_file()
+        .filename(filename.to_string())
+        .maybe_revision(revision.map(str::to_string))
+        .send()
+        .map_err(|e| anyhow!("{filename} missing for '{repo_id}': {e}"))
 }
 
 /// Fetch only `tokenizer.json` — the cheap acquisition path that lets token

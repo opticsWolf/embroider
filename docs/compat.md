@@ -69,6 +69,26 @@ Rules:
   rejected). Its graph embeds the held-out-fitted calibrator, so its
   golden (`fixtures/golden_decide_gliclass_v4edge.json`, ORT 1.29.0
   CPU) pins ORT values at a 0.03 tolerance, not 1e-6.
+- **Laya marker layout (0.7.0)**: `LayaDecider` (`src/laya.rs`, Python
+  `embroider.LayaDecider`) serving the three registered
+  `convaiinnovations/laya-*` checkpoints from the
+  `opticsWolf/laya-*-fp32-onnx` self-exports. 5-input collation
+  (`input_ids`, `attention_mask`, `marker_pos`, `marker_mask`, `qtype`),
+  `k_cols >= 2` (the exported head's `topk(2)`), options truncated to
+  48 tokens at the tokenizer with the head-budget cut
+  (`max(4, (head_max_len-16)/n)` under 16 tokens of room, instruction
+  floor 8). Own question enum (`Choice` with descriptions +
+  `option_order`, level-`Score` with expected value, statement-`Noul`)
+  — Score is a distribution over levels, never GLiClass's multi-label
+  sigmoid, so `Decider` refuses Laya ids and `LayaDecider` refuses
+  non-Laya ids. Fitted per-bucket temperatures clamped to [0.5, 5.0]
+  (rejections queryable, `choice:11+` refused); decode in float64,
+  `encode_row` exposes the construction for inspection. Golden
+  `fixtures/golden_laya_td.json` (agent-built rows + raw reference
+  decode, 7 cases) + ignored `tests/laya_e2e.rs` (exact ids + markers,
+  abs 1e-6 on every number). `TaskKind::DecideLaya` (`decide-laya`)
+  keeps the routing unambiguous; `cache_info` requires
+  `rl_agent_config.json` for it.
 - **Task registry (0.3.4)**: `acquire::{TaskSpec, TaskKind, builtin_tasks,
   lookup_task, artifact_for_task}` — the non-embedding sibling of
   `ModelSpec` (no `native_dim`/`ladder`; scores and decisions have no
@@ -100,6 +120,9 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank, multilingual; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 7.7e-6) |
 | `knowledgator/gliclass-small-v1.0` fp32 | `knowledgator/gliclass-small-v1.0` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch exact on 8 B0 probes) |
 | `knowledgator/gliclass-v4-edge` fp32 | `knowledgator/gliclass-v4-edge` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label + instruction prompts, labels-first layout; upstream repo referenced, never mirrored; CPU parity ≤0.03 vs goldens — the graph embeds the calibrator, torch Δ 0.028 on the calibrated branch; in-repo q8 rejected at Δ 5.5) |
+| `convaiinnovations/laya-typed-decisions` fp32 | `opticsWolf/laya-typed-decisions-fp32-onnx` (`laya-td-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, marker layout, fitted temps; self-export of `1a793eb`, torch Δ 2.0e-6; agent-row goldens at 1e-6, billing vector unit-pinned) |
+| `convaiinnovations/laya` fp32 | `opticsWolf/laya-english-fp32-onnx` (`laya-base-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, base English 512/192; near-chance zero-shot per Ollaya — faithful export, not classifier duty) |
+| `convaiinnovations/laya-multilingual` fp32 | `opticsWolf/laya-multilingual-fp32-onnx` (`laya-multi-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, multilingual mmBERT-base 1024/256; fastest CPU of the three) |
 
 - **Every built-in model is non-commercial.** Any consumer (okfgraph,
   bobine's callers) that runs them commercially needs a commercial licence

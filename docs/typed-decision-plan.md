@@ -373,8 +373,10 @@ billing softmax(L/1.7601) reproduces the agent's [0.7463, 0.2086,
   7.9e-6; CPU ~97 ms / CUDA ~10 ms, fastest of the three on CPU).
   All three publish as public single-graph fp32 repos under
   `opticsWolf/laya-{typed-decisions,english,multilingual}-fp32-onnx`
-  (manifest-pinned SHA-256); okfgraph serves via `ONNXAgent`, no
-  `build_sequence` Rust port.
+  (manifest-pinned SHA-256). Served in-embroider by `LayaDecider`
+  (0.7.0: `src/laya.rs` ports the marker contract 1:1 — the earlier
+  "serve via `ONNXAgent`" decision is superseded; `ONNXAgent` remains
+  the golden-builder the e2e pins against).
 
 ## 10. External corroboration (2026-10-29, via gossamer)
 

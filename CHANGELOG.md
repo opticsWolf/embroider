@@ -3,6 +3,29 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.7.0] — 2026-10-29
+
+### Added
+- Marker-layout typed decisions: `LayaDecider` (`src/laya.rs`, Python
+  `embroider.LayaDecider`) serving the three registered
+  `convaiinnovations/laya-*` checkpoints (typed-decisions, base
+  English, multilingual — all Apache-2.0) from the
+  `opticsWolf/laya-*-fp32-onnx` self-exports (graph + sidecar +
+  tokenizer + `rl_agent_config.json`). 5-input collation with the
+  `k_cols >= 2` topk(2) floor, 48-token option cap + head-budget cut,
+  own `LayaQuestion` enum (described Choice + `option_order`, level
+  Score with expected value, statement Noul) — Score is a distribution
+  over levels, never the multi-label sigmoid, so `Decider` refuses
+  Laya ids and `LayaDecider` refuses everything else. Fitted
+  per-bucket temperatures clamped to [0.5, 5.0] (rejections
+  queryable); float64 decode; `encode_row` inspection seam.
+  `TaskKind::DecideLaya` (`decide-laya`) + config required in
+  `cache_info`. Golden `fixtures/golden_laya_td.json` (agent-built
+  rows, 7 cases) + `tests/laya_e2e.rs` (exact ids/markers, abs 1e-6
+  on 1.29 CPU); billing temperature vector unit-pinned against §9b.
+  fp32 only (fp16 measured but unwired — its own parity gate;
+  int8 rejected on three arms per the quant-spike rule).
+
 ## [0.6.0] — 2026-10-29
 
 ### Added

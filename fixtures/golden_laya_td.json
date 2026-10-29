@@ -1,0 +1,556 @@
+{
+ "contract": "decide-laya",
+ "model": "convaiinnovations/laya-typed-decisions",
+ "revision": "1a793eb568e6718f15941d08f85432581df534e3",
+ "artifact": "opticsWolf/laya-typed-decisions-fp32-onnx",
+ "provenance": "laya 0.4.17 ONNXAgent construction + py-ort CPU session; Rust e2e pins ids exactly and probs at abs 1e-6; temperature math unit-pinned against the billing vector (softmax(L/1.7601) == [0.7463, 0.2086, 0.0451])",
+ "max_length": 1024,
+ "head_max_len": 256,
+ "token_counts": {
+  "billing_choice": 49,
+  "sport_choice": 27,
+  "sentiment_score": 39,
+  "relevance_true": 59,
+  "relevance_false": 54,
+  "ordered_choice": 27,
+  "solo_choice": 25
+ },
+ "cases": [
+  {
+   "key": "billing_choice",
+   "kind": "choice",
+   "state": "My invoice shows a double charge for last month.",
+   "instructions": "Route the ticket to the right team.",
+   "label": "billing",
+   "probs": [
+    [
+     "billing",
+     0.833675
+    ],
+    [
+     "technical",
+     0.108112
+    ],
+    [
+     "shipping",
+     0.058214
+    ]
+   ],
+   "confidence": 0.492361,
+   "answer_confidence": 0.833675,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    22122,
+    1953,
+    27,
+    22720,
+    253,
+    13571,
+    281,
+    253,
+    987,
+    2285,
+    15,
+    50282,
+    50284,
+    33484,
+    27,
+    29838,
+    1271,
+    13,
+    7260,
+    285,
+    10762,
+    50284,
+    7681,
+    27,
+    16164,
+    13,
+    6332,
+    285,
+    29212,
+    50284,
+    15076,
+    27,
+    6742,
+    12544,
+    285,
+    6548,
+    50282,
+    3220,
+    45156,
+    2722,
+    247,
+    4021,
+    4179,
+    323,
+    1390,
+    1770,
+    15,
+    50282
+   ],
+   "markers": [
+    13,
+    22,
+    30
+   ],
+   "state_tokens": 49,
+   "options": [
+    [
+     "billing",
+     "invoices, charges and payments"
+    ],
+    [
+     "technical",
+     "login, errors and crashes"
+    ],
+    [
+     "shipping",
+     "delivery tracking and returns"
+    ]
+   ]
+  },
+  {
+   "key": "sport_choice",
+   "kind": "choice",
+   "state": "The football match ended 2-1 after extra time.",
+   "instructions": "Decide the topic.",
+   "label": "sports",
+   "probs": [
+    [
+     "sports",
+     0.913418
+    ],
+    [
+     "cooking",
+     0.086582
+    ]
+   ],
+   "confidence": 0.575044,
+   "answer_confidence": 0.913418,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    22122,
+    1953,
+    27,
+    7659,
+    504,
+    253,
+    9400,
+    15,
+    50282,
+    50284,
+    9001,
+    50284,
+    12398,
+    50282,
+    510,
+    5842,
+    3761,
+    7402,
+    374,
+    14,
+    18,
+    846,
+    4465,
+    673,
+    15,
+    50282
+   ],
+   "markers": [
+    10,
+    12
+   ],
+   "state_tokens": 27,
+   "options": [
+    [
+     "sports",
+     null
+    ],
+    [
+     "cooking",
+     null
+    ]
+   ]
+  },
+  {
+   "key": "sentiment_score",
+   "kind": "score",
+   "state": "I love this product, it works perfectly.",
+   "instructions": "Rate the sentiment from negative to positive.",
+   "label": "positive",
+   "probs": [
+    [
+     "negative",
+     0.029707
+    ],
+    [
+     "neutral",
+     0.115683
+    ],
+    [
+     "positive",
+     0.85461
+    ]
+   ],
+   "confidence": 0.55558,
+   "answer_confidence": 0.85461,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    18891,
+    1953,
+    27,
+    28606,
+    253,
+    21942,
+    432,
+    4016,
+    281,
+    2762,
+    15,
+    50282,
+    50284,
+    1268,
+    470,
+    27,
+    4016,
+    50284,
+    1268,
+    337,
+    27,
+    9238,
+    50284,
+    1268,
+    374,
+    27,
+    2762,
+    50282,
+    42,
+    2389,
+    436,
+    1885,
+    13,
+    352,
+    2987,
+    9670,
+    15,
+    50282
+   ],
+   "markers": [
+    13,
+    18,
+    23
+   ],
+   "state_tokens": 39,
+   "levels": [
+    "negative",
+    "neutral",
+    "positive"
+   ],
+   "value": 1.824904
+  },
+  {
+   "key": "relevance_true",
+   "kind": "noul",
+   "state": "supporting text unused",
+   "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+   "label": "true",
+   "probs": [
+    [
+     "false",
+     0.445876
+    ],
+    [
+     "true",
+     0.554124
+    ]
+   ],
+   "confidence": 0.008469,
+   "answer_confidence": 0.554124,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    79,
+    3941,
+    1953,
+    27,
+    9876,
+    253,
+    10056,
+    3662,
+    253,
+    7316,
+    27,
+    1359,
+    513,
+    309,
+    14932,
+    247,
+    14454,
+    23093,
+    9868,
+    32,
+    50282,
+    50284,
+    3221,
+    27,
+    642,
+    13,
+    253,
+    3908,
+    1057,
+    417,
+    2186,
+    50284,
+    2032,
+    27,
+    21476,
+    253,
+    14932,
+    6409,
+    323,
+    884,
+    7253,
+    281,
+    15042,
+    13250,
+    7533,
+    13,
+    840,
+    873,
+    247,
+    747,
+    9868,
+    15,
+    50282,
+    4032,
+    12655,
+    2505,
+    30732,
+    50282
+   ],
+   "markers": [
+    22,
+    32
+   ],
+   "state_tokens": 59,
+   "statement": "Hold the reset button for 10 seconds to restore factory settings, then set a new password."
+  },
+  {
+   "key": "relevance_false",
+   "kind": "noul",
+   "state": "supporting text unused",
+   "instructions": "Does the passage answer the query: How do I reset a forgotten router password?",
+   "label": "false",
+   "probs": [
+    [
+     "false",
+     0.961046
+    ],
+    [
+     "true",
+     0.038954
+    ]
+   ],
+   "confidence": 0.762524,
+   "answer_confidence": 0.961046,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    79,
+    3941,
+    1953,
+    27,
+    9876,
+    253,
+    10056,
+    3662,
+    253,
+    7316,
+    27,
+    1359,
+    513,
+    309,
+    14932,
+    247,
+    14454,
+    23093,
+    9868,
+    32,
+    50282,
+    50284,
+    3221,
+    27,
+    642,
+    13,
+    253,
+    3908,
+    1057,
+    417,
+    2186,
+    50284,
+    2032,
+    27,
+    5729,
+    22348,
+    253,
+    14195,
+    281,
+    1052,
+    7759,
+    285,
+    7975,
+    253,
+    17652,
+    15492,
+    15,
+    50282,
+    4032,
+    12655,
+    2505,
+    30732,
+    50282
+   ],
+   "markers": [
+    22,
+    32
+   ],
+   "state_tokens": 54,
+   "statement": "Preheat the oven to 200 degrees and fold the dough gently."
+  },
+  {
+   "key": "ordered_choice",
+   "kind": "choice",
+   "state": "The election results will be announced at midnight.",
+   "instructions": "Decide the topic.",
+   "label": "politics",
+   "probs": [
+    [
+     "sports",
+     0.045562
+    ],
+    [
+     "politics",
+     0.897199
+    ],
+    [
+     "weather",
+     0.057239
+    ]
+   ],
+   "confidence": 0.634278,
+   "answer_confidence": 0.897199,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    22122,
+    1953,
+    27,
+    7659,
+    504,
+    253,
+    9400,
+    15,
+    50282,
+    50284,
+    8588,
+    50284,
+    9001,
+    50284,
+    8672,
+    50282,
+    510,
+    6132,
+    1543,
+    588,
+    320,
+    6138,
+    387,
+    21811,
+    15,
+    50282
+   ],
+   "markers": [
+    10,
+    12,
+    14
+   ],
+   "state_tokens": 27,
+   "options": [
+    [
+     "sports",
+     null
+    ],
+    [
+     "politics",
+     null
+    ],
+    [
+     "weather",
+     null
+    ]
+   ],
+   "option_order": [
+    2,
+    0,
+    1
+   ]
+  },
+  {
+   "key": "solo_choice",
+   "kind": "choice",
+   "state": "The football match ended 2-1 after extra time.",
+   "instructions": "Decide the topic.",
+   "label": "sports",
+   "probs": [
+    [
+     "sports",
+     1.0
+    ]
+   ],
+   "confidence": 1.0,
+   "answer_confidence": 1.0,
+   "act_probability": 1.0,
+   "agent_ids": [
+    50281,
+    22122,
+    1953,
+    27,
+    7659,
+    504,
+    253,
+    9400,
+    15,
+    50282,
+    50284,
+    9001,
+    50282,
+    510,
+    5842,
+    3761,
+    7402,
+    374,
+    14,
+    18,
+    846,
+    4465,
+    673,
+    15,
+    50282
+   ],
+   "markers": [
+    10
+   ],
+   "state_tokens": 25,
+   "options": [
+    [
+     "sports",
+     null
+    ]
+   ]
+  }
+ ]
+}

@@ -138,6 +138,15 @@ pub(crate) fn load_tokenizer(
     Ok(tokenizer)
 }
 
+/// Required special token id — fails naming the token (shared by the
+/// GLiClass and Laya constructors; a tokenizer without the layout's
+/// specials cannot serve it).
+pub(crate) fn special_id(tokenizer: &tokenizers::Tokenizer, token: &str) -> Result<u32> {
+    tokenizer
+        .token_to_id(token)
+        .ok_or_else(|| anyhow!("tokenizer lacks required special token '{token}'"))
+}
+
 /// Token count without special tokens — replaces
 /// `len(tokenizer.encode(t, add_special_tokens=False))` for the
 /// context-window guard, so the transformers dependency can go.

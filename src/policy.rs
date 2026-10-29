@@ -58,6 +58,14 @@ impl SessionPolicy {
         Self::text_embed()
     }
 
+    /// Measured policy for Laya (marker-layout decision) sessions. Same
+    /// start as decide — the rows are short either way; re-measure on
+    /// marker workloads (5-input collation, wider batches) before
+    /// retuning, so Laya tuning can diverge without touching GLiClass.
+    pub fn laya() -> Self {
+        Self::text_embed()
+    }
+
     /// Measured policy for text-embedding sessions: Level3, intra =
     /// physical-cores/2, inter = 1 (fastest of the tested configs; do not
     /// mix tuning levels inside one vector index — see the README table).

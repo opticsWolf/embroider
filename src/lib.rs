@@ -24,6 +24,7 @@
 
 pub mod acquire;
 pub mod decide;
+pub mod laya;
 pub mod diag;
 pub mod error;
 pub mod jina;
@@ -35,9 +36,12 @@ pub mod providers;
 
 pub use acquire::{
     artifact_for, artifact_for_task, builtin_models, builtin_tasks, cache_info, cache_info_files,
-    fetch_tokenizer_file, lookup_model, lookup_task, parse_owner_name, repo_for_precision,
+    fetch_repo_file, fetch_tokenizer_file, lookup_model, lookup_task, parse_owner_name,
+    repo_for_precision,
     Artifact, CacheReport, ModelSpec, TaskKind, TaskSpec, FP16_TEXT_MODEL, FP32_TEXT_MODEL,
-    GLICLASS_SMALL, GLICLASS_SMALL_MODEL, NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
+    GLICLASS_SMALL, GLICLASS_SMALL_MODEL, GLICLASS_V4_EDGE, GLICLASS_V4_EDGE_MODEL,
+    LAYA_BASE, LAYA_BASE_MODEL, LAYA_MULTI, LAYA_MULTI_MODEL, LAYA_TD, LAYA_TD_MODEL,
+    NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
     RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
 };
 pub use diag::{report, OrtReport};
@@ -48,6 +52,7 @@ pub use rerank::{
 pub use decide::{
     Decider, Decision, Question, DECIDE_ABSOLUTE_MAX, DECIDE_DEFAULT_MAX,
 };
+pub use laya::{LayaDecider, LayaDecision, LayaOption, LayaQuestion, LayaTemperatures};
 pub use vision::{
     vision_target_size, JinaV5Vision, VISION_MAX_PIXELS, VISION_MIN_PIXELS,
 };
@@ -64,6 +69,8 @@ pub use providers::{
 
 #[cfg(feature = "extension-module")]
 use pyo3::prelude::*;
+#[cfg(feature = "extension-module")]
+use pyo3::types::{PyList, PyTuple};
 #[cfg(feature = "extension-module")]
 use std::path::PathBuf;
 
@@ -476,6 +483,209 @@ impl PyDecider {
     }
 }
 
+/// Parse one Laya question from its Python tuple shape:
+/// - `("choice", instructions, options[, option_order])` where each
+///   option is a `label` string or a `(label, description|None)` pair.
+/// - `("score", instructions, [levels...])`.
+/// - `("noul", instructions, statement)`.
+#[cfg(feature = "extension-module")]
+fn parse_laya_question(obj: &Bound<'_, PyAny>) -> PyResult<LayaQuestion> {
+    let tup = obj
+        .cast::<PyTuple>()
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("a Laya question is a tuple (see LayaDecider.decide)"))?;
+    let kind: String = tup
+        .get_item(0)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("a Laya question needs (kind, instructions, ...)"))?
+        .extract()?;
+    let instructions: String = tup
+        .get_item(1)
+        .map_err(|_| pyo3::exceptions::PyValueError::new_err("a Laya question needs (kind, instructions, ...)"))?
+        .extract()?;
+    match kind.as_str() {
+        "choice" => {
+            let opts_obj = tup
+                .get_item(2)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("choice needs an options list"))?;
+            let opts = opts_obj
+                .cast::<PyList>()
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("choice needs an options list"))?;
+            let mut options = Vec::with_capacity(opts.len());
+            for o in opts.iter() {
+                if let Ok(label) = o.extract::<String>() {
+                    options.push(LayaOption { label, description: None });
+                } else if let Ok(pair) = o.cast::<PyTuple>() {
+                    let label: String = pair
+                        .get_item(0)
+                        .map_err(|_| pyo3::exceptions::PyValueError::new_err("an option pair is (label, description|None)"))?
+                        .extract()?;
+                    let desc: Option<String> = pair
+                        .get_item(1)
+                        .map_err(|_| pyo3::exceptions::PyValueError::new_err("an option pair is (label, description|None)"))?
+                        .extract()?;
+                    options.push(LayaOption { label, description: desc });
+                } else {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "a choice option is a label string or a (label, description|None) pair",
+                    ));
+                }
+            }
+            let option_order: Option<Vec<usize>> =
+                tup.get_item(3).ok().and_then(|v| v.extract().ok());
+            Ok(LayaQuestion::Choice { instructions, options, option_order })
+        }
+        "score" => {
+            let levels: Vec<String> = tup
+                .get_item(2)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("score needs a levels list"))?
+                .extract()?;
+            Ok(LayaQuestion::Score { instructions, levels })
+        }
+        "noul" => {
+            let statement: String = tup
+                .get_item(2)
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("noul needs a statement string"))?
+                .extract()?;
+            Ok(LayaQuestion::Noul { instructions, statement })
+        }
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Laya question kind must be 'choice', 'score' or 'noul', got '{other}'"
+        ))),
+    }
+}
+
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "LayaDecider")]
+struct PyLayaDecider {
+    inner: LayaDecider,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyLayaDecider {
+    #[staticmethod]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, device="auto", max_length=None, precision=None, cpu_arena=false))]
+    fn open(
+        model_id: &str,
+        revision: Option<String>,
+        cache_dir: Option<String>,
+        device: &str,
+        max_length: Option<usize>,
+        precision: Option<&str>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
+        let inner = LayaDecider::open(
+            model_id,
+            revision.as_deref(),
+            cache_dir.map(PathBuf::from),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            precision,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (onnx_path, tokenizer_path, config_path, device="auto", max_length=None, cpu_arena=false))]
+    fn open_files(
+        onnx_path: &str,
+        tokenizer_path: &str,
+        config_path: &str,
+        device: &str,
+        max_length: Option<usize>,
+        cpu_arena: bool,
+    ) -> PyResult<Self> {
+        let inner = LayaDecider::open_files(
+            std::path::Path::new(onnx_path),
+            std::path::Path::new(tokenizer_path),
+            std::path::Path::new(config_path),
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            max_length,
+            cpu_arena,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    /// Answer questions over one state: `questions` is a list of Laya
+    /// question tuples — `("choice", ins, options[, order])`,
+    /// `("score", ins, levels)`, `("noul", ins, statement)` — where a
+    /// choice option is a label string or a `(label, description|None)`
+    /// pair. Returns `[(label, [(option, prob), ...], value|None,
+    /// confidence, answer_confidence, act_probability), ...]` in question
+    /// order — one padded session run for the whole batch.
+    #[pyo3(signature = (state, questions))]
+    fn decide(
+        &self,
+        py: Python<'_>,
+        state: &str,
+        questions: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<Vec<(String, Vec<(String, f32)>, Option<f32>, f32, f32, f32)>> {
+        let mut qs = Vec::with_capacity(questions.len());
+        for q in &questions {
+            qs.push(parse_laya_question(q)?);
+        }
+        py.detach(|| {
+            let ds = self
+                .inner
+                .decide(state, &qs)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+            Ok(ds
+                .into_iter()
+                .map(|d| {
+                    (
+                        d.label,
+                        d.probabilities,
+                        d.value,
+                        d.confidence,
+                        d.answer_confidence,
+                        d.act_probability,
+                    )
+                })
+                .collect())
+        })
+    }
+
+    fn count_tokens(&self, text: &str) -> PyResult<usize> {
+        self.inner
+            .count_tokens(text)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+    }
+
+    /// Checkpoint temperatures after the [0.5, 5.0] clamp: the triple,
+    /// the per-bucket map, and the load-time rejection list.
+    fn temperature_report(&self) -> (Vec<f64>, Vec<(String, f64)>, Vec<String>) {
+        (
+            self.inner.temperatures().to_vec(),
+            self.inner.temperature_by_options(),
+            self.inner.temperature_rejections().to_vec(),
+        )
+    }
+
+    #[getter]
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    #[getter]
+    fn used_cuda(&self) -> bool {
+        self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn max_length(&self) -> usize {
+        self.inner.max_len()
+    }
+}
+
 #[cfg(feature = "extension-module")]
 #[pyclass(name = "JinaV5Vision")]
 struct PyJinaV5Vision {
@@ -765,6 +975,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJinaTokenizer>()?;
     m.add_class::<PyReranker>()?;
     m.add_class::<PyDecider>()?;
+    m.add_class::<PyLayaDecider>()?;
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;

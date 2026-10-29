@@ -146,6 +146,23 @@ d4.decide(state, [("choice", "Apply the refund policy.", ["approved", "denied", 
 d.count_tokens(state)   # true length, no specials
 ```
 
+## Laya (Python)
+
+```python
+from embroider import LayaDecider
+
+d = LayaDecider.open("convaiinnovations/laya-typed-decisions")
+d.decide("My invoice shows a double charge.", [
+    ("choice", "Route the ticket.", [("billing", "invoices and payments"), ("technical", "login and crashes")]),
+    ("noul", "Does the passage answer the query: How do I reset my password?",
+     "Hold the reset button for 10 seconds."),
+])
+# -> [(label, probs, value|None, confidence, answer_confidence, act), ...]
+d.temperature_report()   # (triple, per-bucket map, clamp rejections)
+d.decide(state, [("score", "Rate the sentiment.", ["negative", "neutral", "positive"])])
+# -> value = expected level index, label = top level text
+```
+
 Sequence cap: `max_length` (default 512, the model ceiling); truncation is
 truncate-state-side-first — the options are the question and are never cut
 to fit the state, and options that alone fill the cap raise instead of

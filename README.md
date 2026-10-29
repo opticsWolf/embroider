@@ -288,8 +288,50 @@ accumulates kernel-order drift; exact-match labels, torch exact / Δ
 0.028 on the B0 probes) with the ignored `tests/decide_e2e.rs`
 asserting them plus the layout proof per recipe. GLiClass-small is
 the seam-proving spike; v4-edge is the better model (calibrated,
-instruction prompts); Laya (native typed questions) stays
-queued in docs/[typed-decision-plan.md](docs/typed-decision-plan.md).
+instruction prompts); Laya (native typed questions, descriptions,
+level-scores, noul) is served by `LayaDecider` — see `## Laya` below.
+
+## Laya
+
+Marker-layout typed decisions: the state goes in as plain tokens and
+the questions arrive as **marker positions** — 5 inputs (`input_ids`,
+`attention_mask`, `marker_pos`, `marker_mask`, `qtype`), 2 outputs
+(`logits`, `act_logits`). `LayaDecider.open(model_id, ...)` serves the
+three registered `convaiinnovations/laya-*` checkpoints from the
+`opticsWolf/laya-*-fp32-onnx` self-exports (graph + sidecar +
+tokenizer + `rl_agent_config.json`, all from the artifact repo);
+`open_files(onnx_path, tokenizer_path, config_path, ...)` takes
+explicit files — the config is required, never optional: it carries
+the checkpoint truth (ceilings, temperatures, layout check) and
+caller-supplied temps would silently fork the calibration.
+
+`LayaQuestion::{Choice, Score, Noul}` mirrors laya's qdefs, not
+`Question`: Choice carries labels with optional descriptions
+(single-label softmax), Score carries ordered LEVELS (one distribution
+over levels — expected value in `.value`, top level in `.label`), Noul
+carries one statement (P(true) — the rerank primitive). Score here is
+*not* GLiClass's multi-label sigmoid; the two must never share a
+question type, so `Decider::open` refuses Laya ids (and `LayaDecider`
+refuses non-Laya ids) instead of failing late on the wrong graph.
+`option_order` permutes option slots (reported back in caller order);
+it must be an exact permutation — a silent misindex would attach
+probabilities to the wrong options.
+
+Temperature is fitted, not identity: per-bucket scales from the config
+(`choice:2`, `choice:3-5`, …, `noul:2`) clamped to [0.5, 5.0] with the
+rejections queryable via `temperature_rejections()` (the shipped
+`choice:11+` 0.1006 sharpens ~10x — the clamp refuses it). Decode is
+`logits/t → softmax → unpermute → per-type shape` in float64 (the
+agent's numpy arithmetic), cast to f32 at the boundary; act head reads
+`softmax(act_logits)[0]` (`.act_probability`, feeds escalation).
+Collation pads marker columns to `max(kmax, 2)` — the exported head
+takes `topk(2)`, so one-option questions still collate two columns.
+Goldens live in `fixtures/golden_laya_td.json` (agent-built rows + raw
+float64 reference decode, 7 cases incl. permutation + solo + relevance
+probes) with the ignored `tests/laya_e2e.rs` asserting exact input-id
++ marker equality and 1e-6 on every number. Deliberately not ported:
+`predict_long` scans (caller windows + aggregates), `binning_map`
+(no checkpoint ships one), `lang_temperatures`, hooks/serve.
 
 ## Running without downloads
 
