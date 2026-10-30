@@ -293,3 +293,30 @@ Per-model repo (house style, cf. `opticsWolf/laya-*-fp32-onnx`):
    assignment, latency) before any serving claim.
 7. Publish (§7) only on go-ahead; bench into the tables; serve in
    embroider with goldens + CPU/CUDA e2e.
+
+### 9b. q8 fleet notes (Oct 2026)
+
+Post-hoc weight-only q8 via ORT MatMulNBitsQuantizer (bits=8, block
+128, asymmetric) worked for 7 of 8 models; GLiClass-small failed the
+0-flip gate (knife-edge travel cases, encoder-sensitive even at
+block 32 with the head excluded) and stays fp32. Results: decider-2b
+0.0020, v4-edge 0.090, laya-td 0.023 / base 0.022 / multi 0.097,
+minilm ranks kept, mmarco nDCG within 0.016 on all 4 Nano benches.
+
+- The quantizer appends to an existing .data file: always delete
+  before a rebuild.
+- Scope exclusions by node name (nodes_to_exclude) when the head is
+  the sensitive part; verify with the gate, not by assumption.
+- Non-standard sidecars (decider-2b .safetensors) need the hand-rolled
+  swap: trace each MatMul B-path through reshaping ops to its
+  initializer, read true weights via safetensors, quantize (block 32,
+  fp32 scales to match fp32 activations), build MatMulNBits in place,
+  fixpoint-eliminate dead chains seeded with graph outputs, drop
+  orphaned initializers. Dynamic-B MatMuls (slot head) skip
+  themselves. Ship mixed-layout (new .data + original sidecar); do
+  not consolidate (it doubles the artifact).
+- Publish: new repos get full assembly + upload_folder; existing
+  repos take staged deltas (new files + patched README + extended
+  manifest) via upload_folder with no delete patterns. Always
+  encoding=utf-8 on README writes (Windows cp1252 mangles existing
+  unicode).
