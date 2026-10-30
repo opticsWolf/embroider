@@ -1102,6 +1102,9 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
         if t.int8.is_some() {
             prec.push("int8");
         }
+        if t.q8.is_some() {
+            prec.push("q8");
+        }
         d.insert("precisions".to_string(), prec.join(","));
         d.insert("text_partner".to_string(), String::new());
         d

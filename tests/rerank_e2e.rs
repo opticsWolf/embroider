@@ -8,6 +8,9 @@
 //! - `RERANK_E2E_TOK` → MiniLM-L-6 `tokenizer.json`
 //! - `RERANK_MM_E2E_ONNX` / `RERANK_MM_E2E_TOK` → the mMARCO pair
 //!   (each pair optional: set one to test one model)
+//! - `RERANK_E2E_Q8_ONNX` / `RERANK_E2E_Q8_TOK`,
+//!   `RERANK_MM_E2E_Q8_ONNX` / `RERANK_MM_E2E_Q8_TOK` → the q8 pair
+//!   (MiniLM worst 0.161, mMARCO worst 0.679 — q8 legs pin those bounds)
 //!
 //! Gates (the spike-plan bar): abs diff ≤ 1e-6 per golden logit, and
 //! relevant outranks irrelevant per language.
@@ -21,7 +24,7 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
-fn check(onnx: &str, tok: &str, fixture: &str) {
+fn check(onnx: &str, tok: &str, fixture: &str, tol: f64) {
     let r = Reranker::open_files(
         Path::new(onnx),
         Path::new(tok),
@@ -58,7 +61,7 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
         let want = c["score"].as_f64().expect("score");
         let d = (got[i] as f64 - want).abs();
         assert!(
-            d <= 1e-6,
+            d <= tol,
             "{}: got {} want {want} (|Δ|={d})",
             keys[i],
             got[i]
@@ -140,17 +143,44 @@ fn check(onnx: &str, tok: &str, fixture: &str) {
 fn rerank_e2e_parity_vs_goldens() {
     let mut ran = false;
     if let (Some(onnx), Some(tok)) = (env("RERANK_E2E_ONNX"), env("RERANK_E2E_TOK")) {
-        check(&onnx, &tok, "fixtures/golden_rerank_minilm.json");
+        check(&onnx, &tok, "fixtures/golden_rerank_minilm.json", 1e-6);
         ran = true;
     }
     if let (Some(onnx), Some(tok)) = (env("RERANK_MM_E2E_ONNX"), env("RERANK_MM_E2E_TOK")) {
-        check(&onnx, &tok, "fixtures/golden_rerank_mmarco.json");
+        check(&onnx, &tok, "fixtures/golden_rerank_mmarco.json", 1e-6);
         ran = true;
     }
     if !ran {
         eprintln!(
             "rerank e2e skipped: set RERANK_E2E_ONNX/RERANK_E2E_TOK \
              and/or RERANK_MM_E2E_ONNX/RERANK_MM_E2E_TOK"
+        );
+    }
+}
+
+/// q8 legs: same goldens through the weight-only int8 graphs. Bounds
+/// are the measured fp32-vs-q8 worst diffs (MiniLM 0.161, mMARCO 0.679)
+/// with headroom; rank pins stay exact (order is what ships).
+#[test]
+#[ignore]
+fn rerank_e2e_q8_parity_vs_goldens() {
+    let mut ran = false;
+    if let (Some(onnx), Some(tok)) = (env("RERANK_E2E_Q8_ONNX"), env("RERANK_E2E_Q8_TOK")) {
+        check(&onnx, &tok, "fixtures/golden_rerank_minilm.json", 0.2);
+        ran = true;
+    }
+    if let (Some(onnx), Some(tok)) = (env("RERANK_MM_E2E_Q8_ONNX"), env("RERANK_MM_E2E_Q8_TOK"))
+    {
+        // 0.9 bounds the shipped-path worst (0.864 on en_relevant;
+        // Python-side approx measured 0.679 — truncation differs).
+        // The rank pins inside check() stay exact: order is the contract.
+        check(&onnx, &tok, "fixtures/golden_rerank_mmarco.json", 0.9);
+        ran = true;
+    }
+    if !ran {
+        eprintln!(
+            "rerank q8 e2e skipped: set RERANK_E2E_Q8_ONNX/RERANK_E2E_Q8_TOK \
+             and/or RERANK_MM_E2E_Q8_ONNX/RERANK_MM_E2E_Q8_TOK"
         );
     }
 }

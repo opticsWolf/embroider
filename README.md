@@ -74,11 +74,11 @@ Apache-2.0, the registry's first commercially-usable weights:
 
 | Registry id | Artifact repo | Precisions | Used for |
 |---|---|---|---|
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | itself (`onnx/model.onnx`) | fp32 | Rerank, English |
-| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | itself (`onnx/model.onnx`) | fp32 | Rerank, multilingual (100+ langs) |
+| `cross-encoder/ms-marco-MiniLM-L-6-v2` | itself (`onnx/model.onnx`) + `opticsWolf/ms-marco-MiniLM-L-6-v2-q8-onnx` | fp32, q8 | Rerank, English |
+| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | itself (`onnx/model.onnx`) + `opticsWolf/mmarco-mMiniLMv2-L12-H384-v1-q8-onnx` | fp32, q8 | Rerank, multilingual (100+ langs) |
 | `knowledgator/gliclass-small-v1.0` | itself (`onnx/model.onnx`) | fp32 | Typed decisions (Choice/Score), 144M |
-| `knowledgator/gliclass-v4-edge` | itself (`onnx/model.onnx`) | fp32 | Typed decisions + instruction prompts, labels-first, 440M |
-| `convaiinnovations/laya-typed-decisions` | `opticsWolf/laya-typed-decisions-fp32-onnx` | fp32 | Typed decisions, marker layout, fitted temps |
+| `knowledgator/gliclass-v4-edge` | itself (`onnx/model.onnx`) + `opticsWolf/gliclass-v4-edge-q8-onnx` | fp32, q8 | Typed decisions + instruction prompts, labels-first, 440M |
+| `convaiinnovations/laya-typed-decisions` | `opticsWolf/laya-typed-decisions-fp32-onnx` | fp32, q8 | Typed decisions, marker layout, fitted temps |
 
 ### Custom models
 
@@ -193,6 +193,11 @@ FP16 on CPU (FP16-on-CPU runs >40x slower than FP32-CPU — measured).
 explicit model ids (omni tower, mirrors) always win untouched. An explicit
 `fp16`-on-CPU warns loudly but is honoured. Do not mix precisions in one
 index — FP32 vs FP16 weights shift vectors, same as mixing tuning levels.
+`q8` selects the weight-only int8 tier where the registry lists one
+(decider-2b, v4-edge, all three Laya, both rerankers — GLiClass-small
+failed the 0-flip gate and stays fp32-only). Unlike fp16, q8 runs on any
+device (activations stay fp32); `auto` never resolves to q8 — it is an
+explicit deployment choice, same rule as int8.
 
 ### Memory: CPU arena off by default
 
@@ -236,9 +241,8 @@ enter an index.
 `Reranker.open(model_id, revision=None, cache_dir=None, device="auto",
 max_length=None, precision=None, cpu_arena=False)`: `max_length` caps
 pairs at 1..=512 (`None` = the registered ceiling; `.max_len` reports
-the effective limit), `precision` selects weights (`auto`/`fp32`; only
-fp32 tiers are listed until measured — the quant-spike rule, so `auto`
-lands fp32 everywhere today). `score_one(query, doc)` scores a pair;
+the effective limit), `precision` selects weights (`auto`/`fp32`/`q8`; q8 tiers are listed where measured — the quant-spike rule, so `auto`
+lands fp32 everywhere for rerank today). `score_one(query, doc)` scores a pair;
 `score_many([(q, d), …])` scores a batch in one padded session run
 (order-preserving); `count_tokens(text)` reports true length without
 specials through a truncation-free handle (shared helper with JinaV5).
@@ -384,7 +388,7 @@ explicit `inter_op_num_threads=1` re-triggers it — all probed.
 `fixtures/golden_decider2b.json` (8 cases incl. the 12-option wide
 path + a mixed multi batch) pins exact input ids and 5e-4 answers on
 CPU *and* CUDA (`tests/decider2b_e2e.rs` — the CUDA leg gates the
-executor switch). 32k context, fp32 only, CPU slow-tier (~1.5–2 s/row).
+executor switch). 32k context, fp32 + q8 (q8: 1.59 GB int8 linears + the vendored safetensors alongside, worst 0.0020, 0 flips), CPU slow-tier (~1.5–2 s/row).
 
 ## Running without downloads
 

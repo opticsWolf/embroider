@@ -199,6 +199,9 @@ pub struct TaskSpec {
     pub fp32: Artifact<'static>,
     pub fp16: Option<Artifact<'static>>,
     pub int8: Option<Artifact<'static>>,
+    /// Weight-only int8 tier (measured, 0 flips — see `Precision::Q8`).
+    /// Unlisted pairs fall back to fp32 (same rule as fp16/int8).
+    pub q8: Option<Artifact<'static>>,
 }
 
 /// Rerank spike, English (plan §A0): MiniLM-L-6 cross-encoder, 22.7M.
@@ -212,6 +215,11 @@ pub const RERANK_MINILM: TaskSpec = TaskSpec {
     fp32: Artifact { repo: RERANK_MINILM_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
+    q8: Some(Artifact {
+        repo: "opticsWolf/ms-marco-MiniLM-L-6-v2-q8-onnx",
+        file: "model_q8.onnx",
+        sidecar: Some("model_q8.onnx.data"),
+    }),
 };
 
 /// Rerank spike, multilingual (plan §A0): mMARCO MiniLMv2-L12-H384, 118M.
@@ -226,6 +234,11 @@ pub const RERANK_MMARCO: TaskSpec = TaskSpec {
     fp32: Artifact { repo: RERANK_MMARCO_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
+    q8: Some(Artifact {
+        repo: "opticsWolf/mmarco-mMiniLMv2-L12-H384-v1-q8-onnx",
+        file: "model_q8.onnx",
+        sidecar: Some("model_q8.onnx.data"),
+    }),
 };
 
 /// Decide spike, English single/multi-label (plan §8): GLiClass-small
@@ -242,6 +255,9 @@ pub const GLICLASS_SMALL: TaskSpec = TaskSpec {
     fp32: Artifact { repo: GLICLASS_SMALL_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
+    // No q8: the weight-only build flips 2 knife-edge travel cases
+    // (0.11-0.25 drift, block 32, head excluded) — the 0-flip gate holds.
+    q8: None,
 };
 
 /// Decide, English single/multi-label + instruction prompts (plan
@@ -249,8 +265,9 @@ pub const GLICLASS_SMALL: TaskSpec = TaskSpec {
 /// recipe (`prompt_first: true` — labels + SEP + prompt + text, the
 /// v4 training order), 2048-token ceiling per the model card's usage,
 /// in-repo ONNX (`onnx/model.onnx`) + root `tokenizer.json` at pinned
-/// revision `885af1af`; fp32 only (the in-repo q8 drifts 5.5 on the
-/// logit scale — rejected, same rule as every other quant). The graph
+/// revision `885af1af`; q8 tier at `opticsWolf/gliclass-v4-edge-q8-onnx`
+/// (worst 0.090, 0 flips — the dynamic-int8 route stays rejected, the
+/// weight-only route passed). The graph
 /// embeds the held-out-fitted calibrator (B0-proven: ORT matches the
 /// calibrated branch, mismatches raw by 7.9), so goldens pin ORT
 /// values at a 0.03 tolerance, not 1e-6.
@@ -262,6 +279,11 @@ pub const GLICLASS_V4_EDGE: TaskSpec = TaskSpec {
     fp32: Artifact { repo: GLICLASS_V4_EDGE_MODEL, file: "onnx/model.onnx", sidecar: None },
     fp16: None,
     int8: None,
+    q8: Some(Artifact {
+        repo: "opticsWolf/gliclass-v4-edge-q8-onnx",
+        file: "model_q8.onnx",
+        sidecar: Some("model_q8.onnx.data"),
+    }),
 };
 
 /// Laya checkpoints (plan §9b): native typed questions (choice with
@@ -315,6 +337,11 @@ pub const LAYA_TD: TaskSpec = TaskSpec {
     },
     fp16: None,
     int8: None,
+    q8: Some(Artifact {
+        repo: "opticsWolf/laya-typed-decisions-fp32-onnx",
+        file: "laya-td-q8.onnx",
+        sidecar: Some("laya-td-q8.onnx.data"),
+    }),
 };
 
 pub const LAYA_BASE: TaskSpec = TaskSpec {
@@ -329,6 +356,11 @@ pub const LAYA_BASE: TaskSpec = TaskSpec {
     },
     fp16: None,
     int8: None,
+    q8: Some(Artifact {
+        repo: "opticsWolf/laya-english-fp32-onnx",
+        file: "laya-base-q8.onnx",
+        sidecar: Some("laya-base-q8.onnx.data"),
+    }),
 };
 
 pub const LAYA_MULTI: TaskSpec = TaskSpec {
@@ -343,6 +375,11 @@ pub const LAYA_MULTI: TaskSpec = TaskSpec {
     },
     fp16: None,
     int8: None,
+    q8: Some(Artifact {
+        repo: "opticsWolf/laya-multilingual-fp32-onnx",
+        file: "laya-multi-q8.onnx",
+        sidecar: Some("laya-multi-q8.onnx.data"),
+    }),
 };
 
 /// Slot-layout typed decisions (plan `docs/typed-decision-plan.md` §10):
@@ -369,6 +406,13 @@ pub const DECIDER2B: TaskSpec = TaskSpec {
     },
     fp16: None,
     int8: None,
+    // q8 graph still reads embeddings/head/norms from model.safetensors —
+    // Decider2B::open fetches it alongside the q8 sidecar (see open).
+    q8: Some(Artifact {
+        repo: "opticsWolf/decider-2b-fp32-onnx",
+        file: "model_q8.onnx",
+        sidecar: Some("model_q8.onnx.data"),
+    }),
 };
 
 /// Builtin task registry. Adding entries never moves existing graphs —
@@ -395,13 +439,14 @@ pub fn lookup_task(model_id: &str) -> Option<TaskSpec> {
 
 /// Select the acquisition artifact for a (task model, precision) request.
 /// `Auto` must already be resolved via `Precision::resolve` before
-/// calling (auto never yields `Int8`). Unlisted pairs fall back to the
-/// spec fp32 artifact; unknown ids fall back to the legacy layout.
+/// calling (auto never yields `Int8`/`Q8`). Unlisted pairs fall back to
+/// the spec fp32 artifact; unknown ids fall back to the legacy layout.
 pub fn artifact_for_task<'a>(model_id: &'a str, precision: Precision) -> Artifact<'a> {
     match lookup_task(model_id) {
         Some(spec) => match precision {
             Precision::Fp16 => spec.fp16.unwrap_or(spec.fp32),
             Precision::Int8 => spec.int8.unwrap_or(spec.fp32),
+            Precision::Q8 => spec.q8.unwrap_or(spec.fp32),
             _ => spec.fp32,
         },
         None => Artifact { repo: model_id, file: "onnx/model.onnx", sidecar: None },
@@ -700,6 +745,36 @@ mod tests {
             repo_for_precision(FP32_TEXT_MODEL, Precision::Fp32),
             FP32_TEXT_MODEL
         );
+    }
+
+    #[test]
+    fn q8_artifact_resolution_lists_measured_tiers_only() {
+        // Each shipped q8 resolves to its own repo/file/sidecar.
+        let cases = [
+            (RERANK_MINILM_MODEL, "opticsWolf/ms-marco-MiniLM-L-6-v2-q8-onnx", "model_q8.onnx"),
+            (RERANK_MMARCO_MODEL, "opticsWolf/mmarco-mMiniLMv2-L12-H384-v1-q8-onnx", "model_q8.onnx"),
+            (GLICLASS_V4_EDGE_MODEL, "opticsWolf/gliclass-v4-edge-q8-onnx", "model_q8.onnx"),
+            (LAYA_TD_MODEL, "opticsWolf/laya-typed-decisions-fp32-onnx", "laya-td-q8.onnx"),
+            (LAYA_BASE_MODEL, "opticsWolf/laya-english-fp32-onnx", "laya-base-q8.onnx"),
+            (LAYA_MULTI_MODEL, "opticsWolf/laya-multilingual-fp32-onnx", "laya-multi-q8.onnx"),
+            (DECIDER2B_MODEL, "opticsWolf/decider-2b-fp32-onnx", "model_q8.onnx"),
+        ];
+        for (id, repo, file) in cases {
+            let a = artifact_for_task(id, Precision::Q8);
+            assert_eq!(a.repo, repo, "{id}");
+            assert_eq!(a.file, file, "{id}");
+            assert!(a.sidecar().is_some(), "{id}");
+        }
+        // Unlisted pairs fall back to fp32 (small failed the 0-flip
+        // gate; fp16/int8 tiers never existed for these models).
+        let small = artifact_for_task(GLICLASS_SMALL_MODEL, Precision::Q8);
+        assert_eq!(small.repo, GLICLASS_SMALL_MODEL);
+        assert_eq!(small.file, "onnx/model.onnx");
+        let fp16 = artifact_for_task(RERANK_MINILM_MODEL, Precision::Fp16);
+        assert_eq!(fp16.file, "onnx/model.onnx");
+        // Unknown ids take the legacy layout.
+        let legacy = artifact_for_task("someone/custom", Precision::Q8);
+        assert_eq!(legacy.file, "onnx/model.onnx");
     }
 
     #[test]

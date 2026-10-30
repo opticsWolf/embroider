@@ -65,7 +65,7 @@ Rules:
   metadata, so a wrong layout would score garbage, never an error).
   Second registry entry: `knowledgator/gliclass-v4-edge` (440M,
   Apache-2.0, labels-first recipe `labels + [SEP] + prompt? + state`,
-  2048 ceiling, fp32 only — the in-repo q8 drifts 5.5 and is
+  2048 ceiling, fp32 + q8 (weight-only; the dynamic-int8 route drifts 5.5 and stays rejected) and is
   rejected). Its graph embeds the held-out-fitted calibrator, so its
   golden (`fixtures/golden_decide_gliclass_v4edge.json`, ORT 1.29.0
   CPU) pins ORT values at a 0.03 tolerance, not 1e-6.
@@ -141,7 +141,7 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank, English; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 2.9e-6) |
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank, multilingual; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 7.7e-6) |
 | `knowledgator/gliclass-small-v1.0` fp32 | `knowledgator/gliclass-small-v1.0` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch exact on 8 B0 probes) |
-| `knowledgator/gliclass-v4-edge` fp32 | `knowledgator/gliclass-v4-edge` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label + instruction prompts, labels-first layout; upstream repo referenced, never mirrored; CPU parity ≤0.03 vs goldens — the graph embeds the calibrator, torch Δ 0.028 on the calibrated branch; in-repo q8 rejected at Δ 5.5) |
+| `knowledgator/gliclass-v4-edge` fp32 | `knowledgator/gliclass-v4-edge` (`onnx/model.onnx`) + `opticsWolf/gliclass-v4-edge-q8-onnx` | Apache-2.0 (decide, single/multi-label + instruction prompts, labels-first layout; upstream fp32 referenced, q8 mirrored; CPU parity ≤0.03 vs goldens — the graph embeds the calibrator, torch Δ 0.028 on the calibrated branch; dynamic-int8 q8 rejected at Δ 5.5, weight-only q8 ships at worst 0.090, 0 flips) |
 | `convaiinnovations/laya-typed-decisions` fp32 | `opticsWolf/laya-typed-decisions-fp32-onnx` (`laya-td-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, marker layout, fitted temps; self-export of `1a793eb`, torch Δ 2.0e-6; agent-row goldens at 1e-6, billing vector unit-pinned) |
 | `convaiinnovations/laya` fp32 | `opticsWolf/laya-english-fp32-onnx` (`laya-base-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, base English 512/192; near-chance zero-shot per Ollaya — faithful export, not classifier duty) |
 | `convaiinnovations/laya-multilingual` fp32 | `opticsWolf/laya-multilingual-fp32-onnx` (`laya-multi-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, multilingual mmBERT-base 1024/256; fastest CPU of the three) |
@@ -167,14 +167,14 @@ it appears, never a CPU upgrade.
 
 | Registry model | Download | CPU | CUDA |
 |---|---|---|---|
-| `ms-marco-MiniLM-L-6-v2` | 91 MB | 1–3 ms/pair, CPU-native | same |
-| `mmarco-mMiniLMv2-L12-H384-v1` | 471 MB | 1–3 ms/pair, CPU-native | same |
+| `ms-marco-MiniLM-L-6-v2` | 91 MB (**q8: 52 MB**) | 1–3 ms/pair, CPU-native | same |
+| `mmarco-mMiniLMv2-L12-H384-v1` | 471 MB (**q8: 379 MB**) | 1–3 ms/pair, CPU-native | same (q8 nDCG within 0.016 on all 4 Nano benches) |
 | `gliclass-small-v1.0` | 575 MB | **10.5 ms, the CPU sweet spot** | faster, unneeded |
-| `gliclass-v4-edge` | 1.77 GB | **38 ms, fine on CPU** | **2 ms** |
-| `laya-typed-decisions` | 1.70 GB (fp16: 846 MB) | 65 ms / 225 ms per 4-row batch — **slow-tier** | **~15 ms/batch** (fp16: 10–23 ms) |
-| `laya` (base English) | 1.70 GB (fp16: 846 MB) | ~220 ms — not classifier duty (near-chance zero-shot per Ollaya) | ~15 ms |
-| `laya-multilingual` | 1.32 GB (fp16: 678 MB) | **~97 ms, fastest Laya on CPU** | **~10 ms** |
-| `decider-2b` | 3.76 GB (graph 7.6 MB) | 1.5–2 s/row — **slow-tier, CUDA duty** | **~75–90 ms/row** (parallel executor) |
+| `gliclass-v4-edge` | 1.77 GB (**q8: 860 MB**) | **38 ms, fine on CPU** | **2 ms** |
+| `laya-typed-decisions` | 1.70 GB (fp16: 846 MB, **q8: 409 MB**) | 65 ms / 225 ms per 4-row batch — **slow-tier** | **~15 ms/batch** (fp16: 10–23 ms) |
+| `laya` (base English) | 1.70 GB (fp16: 846 MB, **q8: 409 MB**) | ~220 ms — not classifier duty (near-chance zero-shot per Ollaya) | ~15 ms |
+| `laya-multilingual` | 1.32 GB (fp16: 678 MB, **q8: 827 MB**) | **~97 ms, fastest Laya on CPU** | **~10 ms** |
+| `decider-2b` | 3.76 GB (graph 7.6 MB; **q8: 1.59 GB + sidecar**) | 1.5–2 s/row — **slow-tier, CUDA duty** | **~75–90 ms/row** (parallel executor) |
 | `jina-embeddings-v5-text-small` | 2.40 GB (fp16: 1.20 GB) | ms-scale, CPU-native | — |
 | `jina-embeddings-v5-text-nano` | 866 MB (fp16: 425 MB, int8: 247 MB) | ms-scale, CPU-native | — |
 | `jina-v5-omni-nano` (vision) | 1.25 GB (fp16: 623 MB) | slow | fp16 CUDA |
@@ -191,10 +191,9 @@ Consumer shapes that follow from the table:
   Laya-td 15 ms/batch, multi 10 ms) — take the fp16 Laya variants to
   halve download and VRAM. GLiClass stays fp32 until its own parity
   gate is wired.
-- **Not served**: int8 on any decision model (rejected — the −1e4 mask
-  sentinel is unquantizable, drift 2.8–9997); fp16 decider-2b (no
-  precision story — the export is fp32-only until its own parity
-  gate is wired).
+- **Not served**: dynamic/static int8 on any decision model (rejected — the −1e4 mask
+  sentinel is unquantizable, drift 2.8–9997); GLiClass-small q8 (failed the 0-flip gate);
+  fp16 decider-2b (no precision story). Weight-only q8 ships where it gates clean (see table).
 - **New registry entries** record the artifact's licence in this table in
   the same change. A model whose licence forbids redistributing adapted
   weights is referenced by upstream repo only, never mirrored.

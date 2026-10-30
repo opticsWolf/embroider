@@ -3,6 +3,26 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.11.0] — 2026-10-30
+
+### Added
+- Weight-only int8 (`q8`) registry tier: `Precision::Q8` (`precision="q8"`,
+  explicit opt-in, device-independent — activations stay fp32 so unlike
+  fp16 it runs anywhere; `auto` never resolves here, same rule as int8)
+  + `TaskSpec.q8` artifact slot + `available_models` precisions. Six
+  measured artifacts, all 0 flips on their reference sets: decider-2b
+  (`model_q8.onnx`, 1.59 GB, worst 0.0020), v4-edge (860 MB, worst
+  0.090), laya-td/base (409 MB, worst 0.023/0.022), laya-multi
+  (827 MB, worst 0.097), MiniLM rerank (52 MB, ranks kept),
+  mMARCO rerank (379 MB, nDCG within 0.016 on all 4 Nano benches).
+  GLiClass-small stays fp32-only (its q8 flips 2 knife-edge travel
+  cases — the gate holds). `Decider2B::open` fetches `model.safetensors`
+  alongside the q8 sidecar (embeddings/head/norms still live there).
+- q8 e2e legs (ignored, env-gated): rerank (MiniLM 0.2 / mMARCO 0.9 —
+  rank pins stay exact), decide v4 (0.1), laya-td (0.03 + exact
+  construction pin), decider-2b CPU + CUDA (0.005 — the CUDA leg gates
+  the planner-bug class on the reshaped graph).
+
 ## [0.10.0] — 2026-10-29
 
 ### Added

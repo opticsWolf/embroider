@@ -75,7 +75,7 @@ fn build_one(c: &Value) -> Decider2BQuestion {
 #[test]
 #[ignore]
 fn decider2b_e2e_parity_vs_reference_goldens() {
-    run_parity(DeviceReq::Cpu);
+    run_parity(DeviceReq::Cpu, 5e-4);
 }
 
 /// The CUDA leg: same goldens through the parallel executor. This is
@@ -86,10 +86,46 @@ fn decider2b_e2e_parity_vs_reference_goldens() {
 #[test]
 #[ignore]
 fn decider2b_e2e_cuda_parity() {
-    run_parity(DeviceReq::Cuda);
+    run_parity(DeviceReq::Cuda, 5e-4);
 }
 
-fn run_parity(device: DeviceReq) {
+/// q8 legs: same goldens through the weight-only int8 linears (worst
+/// measured 0.0020 — the 0.005 bound below carries 2.5x headroom).
+/// Construction pin (exact ids/slots) and labels stay exact; the CUDA
+/// leg matters (the planner bug is graph-shape-sensitive, and q8
+/// reshapes the matmul nodes). Needs `model.safetensors` alongside the
+/// q8 graph (embeds/head/norms still live there).
+#[test]
+#[ignore]
+fn decider2b_e2e_q8_parity_vs_reference_goldens() {
+    run_q8_parity(DeviceReq::Cpu, 0.005);
+}
+
+#[test]
+#[ignore]
+fn decider2b_e2e_q8_cuda_parity() {
+    run_q8_parity(DeviceReq::Cuda, 0.005);
+}
+
+fn run_q8_parity(device: DeviceReq, tol: f64) {
+    let (onnx, tok, dec, cal) = match (
+        env("DECIDER2B_E2E_Q8_ONNX"),
+        env("DECIDER2B_E2E_TOK"),
+        env("DECIDER2B_E2E_DECISION"),
+        env("DECIDER2B_E2E_CALIB"),
+    ) {
+        (Some(o), Some(t), Some(d), Some(c)) => (o, t, d, c),
+        _ => {
+            eprintln!(
+                "decider2b q8 e2e skipped: set DECIDER2B_E2E_Q8_ONNX (+TOK/DECISION/CALIB, safetensors alongside)"
+            );
+            return;
+        }
+    };
+    run_parity_with(device, tol, &onnx, &tok, &dec, &cal);
+}
+
+fn run_parity(device: DeviceReq, tol: f64) {
     let (onnx, tok, dec, cal) = match (
         env("DECIDER2B_E2E_ONNX"),
         env("DECIDER2B_E2E_TOK"),
@@ -105,6 +141,10 @@ fn run_parity(device: DeviceReq) {
             return;
         }
     };
+    run_parity_with(device, tol, &onnx, &tok, &dec, &cal);
+}
+
+fn run_parity_with(device: DeviceReq, tol: f64, onnx: &str, tok: &str, dec: &str, cal: &str) {
     let d = Decider2B::open_files(
         Path::new(&onnx),
         Path::new(&tok),
@@ -168,14 +208,14 @@ fn run_parity(device: DeviceReq) {
             for (j, (opt, p)) in dec.probabilities.iter().enumerate() {
                 assert_eq!(opt, &want_p[j].0, "{key} order");
                 let dd = (*p as f64 - want_p[j].1).abs();
-                assert!(dd <= 5e-4, "{key}[{opt}]: got {p} want {} (|Δ|={dd})", want_p[j].1);
+                assert!(dd <= tol, "{key}[{opt}]: got {p} want {} (|Δ|={dd})", want_p[j].1);
             }
             match &want["value"] {
                 Value::Null => assert!(dec.value.is_none(), "{key} value none"),
                 Value::Number(n) => {
                     let v = n.as_f64().expect("value");
                     assert!(
-                        (dec.value.expect("value") as f64 - v).abs() <= 5e-4,
+                        (dec.value.expect("value") as f64 - v).abs() <= tol,
                         "{key} value"
                     );
                 }

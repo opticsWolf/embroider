@@ -220,6 +220,72 @@ fn laya_e2e_parity_vs_agent_goldens() {
     assert!(e.contains("LayaDecider"), "{e}");
 }
 
+/// q8 leg (td only — the fixture pins td): same goldens through the
+/// weight-only int8 encoder graph (worst measured 0.023, bound 0.03;
+/// labels and the construction pin stay exact; temperatures come from
+/// the untouched fitted head, so the 1e-9 bucket pins are inherited
+/// from the fp32 leg, not re-asserted here).
+#[test]
+#[ignore]
+fn laya_e2e_q8_parity_vs_agent_goldens() {
+    let (onnx, tok, cfg) = match (env("LAYA_E2E_Q8_ONNX"), env("LAYA_E2E_TOK"), env("LAYA_E2E_CFG"))
+    {
+        (Some(o), Some(t), Some(c)) => (o, t, c),
+        _ => {
+            eprintln!("laya q8 e2e skipped: set LAYA_E2E_Q8_ONNX (+LAYA_E2E_TOK/CFG)");
+            return;
+        }
+    };
+    let d = LayaDecider::open_files(
+        Path::new(&onnx),
+        Path::new(&tok),
+        Path::new(&cfg),
+        DeviceReq::Cpu,
+        None,
+        false,
+    )
+    .expect("open_files");
+    let text = std::fs::read_to_string("fixtures/golden_laya_td.json").expect("golden readable");
+    let fx: Value = serde_json::from_str(&text).expect("fixture parses");
+    let cases = fx["cases"].as_array().expect("cases");
+    let items: Vec<(String, LayaQuestion)> = cases
+        .iter()
+        .map(|c| (c["state"].as_str().expect("state").to_string(), build_question(c)))
+        .collect();
+    let refs: Vec<(&str, &LayaQuestion)> =
+        items.iter().map(|(s, q)| (s.as_str(), q)).collect();
+    let got = d.decide_many(&refs).expect("decide_many");
+    assert_eq!(got.len(), cases.len());
+    for (i, c) in cases.iter().enumerate() {
+        let k = c["key"].as_str().expect("key");
+        let dec = &got[i];
+        assert_eq!(dec.label, c["label"].as_str().expect("label"), "{k} label");
+        let want: Vec<(String, f64)> = c["probs"]
+            .as_array()
+            .expect("probs")
+            .iter()
+            .map(|p| (p[0].as_str().expect("opt").to_string(), p[1].as_f64().expect("prob")))
+            .collect();
+        assert_eq!(dec.probabilities.len(), want.len(), "{k} arity");
+        for (j, (opt, p)) in dec.probabilities.iter().enumerate() {
+            assert_eq!(opt, &want[j].0, "{k} order");
+            let dd = (*p as f64 - want[j].1).abs();
+            assert!(dd <= 0.03, "{k}[{opt}]: got {p} want {} (|Δ|={dd})", want[j].1);
+        }
+        // Construction pin stays exact: q8 changes weights, never layout.
+        let (ids, _) = d
+            .encode_row(c["state"].as_str().expect("state"), &build_question(c))
+            .expect("encode_row");
+        let agent_ids: Vec<u32> = c["agent_ids"]
+            .as_array()
+            .expect("agent ids")
+            .iter()
+            .map(|x| x.as_u64().expect("id") as u32)
+            .collect();
+        assert_eq!(ids, agent_ids, "{k} input ids");
+    }
+}
+
 fn open_laya() -> Option<LayaDecider> {
     let (onnx, tok, cfg) = match (env("LAYA_E2E_ONNX"), env("LAYA_E2E_TOK"), env("LAYA_E2E_CFG")) {
         (Some(o), Some(t), Some(c)) => (o, t, c),

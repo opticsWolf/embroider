@@ -712,9 +712,9 @@ impl Decider2B {
         }
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = precision.resolve(used_cuda);
-        if precision != Precision::Fp32 {
+        if precision != Precision::Fp32 && precision != Precision::Q8 {
             eprintln!(
-                "embroider: decider-2b ships fp32 weights only — precision '{}' falls back to the fp32 artifact (the documented unlisted-pair rule, not a measured tier)",
+                "embroider: decider-2b ships fp32+q8 weights — precision '{}' falls back to the fp32 artifact (the documented unlisted-pair rule, not a measured tier)",
                 precision.as_str()
             );
         }
@@ -728,6 +728,11 @@ impl Decider2B {
                 Ok(_) => {}
                 Err(e) => eprintln!("embroider: no {sidecar} sidecar; assuming inline weights ({e})"),
             }
+        }
+        // q8 keeps embeddings/head/norms in the vendored safetensors —
+        // fetch it alongside the q8 sidecar (same repo, same revision).
+        if precision == Precision::Q8 {
+            fetch_repo_file(artifact.repo, "model.safetensors", revision, cache_dir.clone())?;
         }
         let tok_path =
             fetch_repo_file(artifact.repo, "tokenizer.json", revision, cache_dir.clone())?;

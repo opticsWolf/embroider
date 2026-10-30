@@ -428,3 +428,15 @@ classify agree 0.696 full-coverage (800 rows incl. banking77) at
 ~87 ms/row; noul-as-reranker nDCG@10 0.944/0.992/0.947/0.954 across the
 four Nano sets - the best reranker in the building, ahead of the
 dedicated cross-encoders on three of four.
+
+**q8 (0.11.0)**: the 186 decoder linears go to int8 MatMulNBits
+(block 32, fp32 scales to match the fp32 activations) via a
+hand-rolled swap — the vendored `.safetensors` (bf16 bytes, declared
+fp16) is unreadable to the ORT quantizer, so each MatMul B-path is
+traced to its initializer, true weights read via `safetensors`, and
+orphans dropped with a graph-output-seeded fixpoint. Dynamic-B
+MatMuls (slot head) skip themselves; embeddings/head/norms stay in
+the sidecar (`Decider2B::open` fetches it alongside the q8 artifact).
+Gate: worst 0.0020, 0 flips, 10/10 golden agree (incl. the
+0.05-temp noul). Publish: `model_q8.onnx(.data)` next to the fp32 in
+`opticsWolf/decider-2b-fp32-onnx`.

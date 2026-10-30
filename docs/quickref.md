@@ -71,6 +71,7 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8
 | `"auto"` (default) | Follows the *landed* device: CUDA→fp16, CPU→fp32 |
 | `"fp32"` / `"fp16"` | Pinned (fp16 selects the mirror artifact for the default id) |
 | `"int8"` | Nano only; deployment choice, never automatic |
+| `"q8"` | Weight-only int8 where listed (decider-2b, v4-edge, Laya×3, rerankers); deployment choice, never automatic |
 
 `truncate_dim`: Matryoshka ladder only, 32–1024 (nano tops at 768).
 `max_length`: 1–32768, default 8192 (compat); same (text, `max_length`)

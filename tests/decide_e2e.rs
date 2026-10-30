@@ -188,3 +188,18 @@ fn decide_e2e_v4_parity_vs_goldens() {
         eprintln!("decide v4 e2e skipped: set DECIDE_E2E_V4_ONNX/DECIDE_E2E_V4_TOK");
     }
 }
+
+/// v4 q8 leg: same goldens through the weight-only int8 graph (worst
+/// measured 0.0899 — the 0.1 bound below carries ~10% headroom; labels
+/// stay exact). Small has no q8 leg: its build flips 2 knife-edge
+/// travel cases, so it stays fp32-only (see the registry comment).
+#[test]
+#[ignore]
+fn decide_e2e_v4_q8_parity_vs_goldens() {
+    if let (Some(onnx), Some(tok)) = (env("DECIDE_E2E_V4_Q8_ONNX"), env("DECIDE_E2E_V4_Q8_TOK"))
+    {
+        check(&onnx, &tok, "fixtures/golden_decide_gliclass_v4edge.json", 0.1, true, 2048);
+    } else {
+        eprintln!("decide v4 q8 e2e skipped: set DECIDE_E2E_V4_Q8_ONNX/DECIDE_E2E_V4_Q8_TOK");
+    }
+}

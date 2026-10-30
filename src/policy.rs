@@ -149,6 +149,15 @@ pub enum Precision {
     /// models with a MEASURED int8 artifact ship one (nano probe: rank
     /// kept @0.99980, zero top-5 flips); unlisted pairs fall back to fp32.
     Int8,
+    /// Weight-only int8 (MatMulNBits, explicit opt-in only). `Auto`
+    /// never resolves here either: q8 trades download/RAM for a small,
+    /// measured drift (decider-2b worst 0.0020, v4-edge 0.090, mmarco
+    /// nDCG within 0.016) and is a deployment choice. Only models with a
+    /// MEASURED q8 artifact ship one (0 flips on the reference set;
+    /// GLiClass-small failed and stays fp32-only); unlisted pairs fall
+    /// back to fp32. Unlike `Fp16`, q8 runs on any device (activations
+    /// stay fp32, no emulated kernels).
+    Q8,
 }
 
 impl Precision {
@@ -158,8 +167,9 @@ impl Precision {
             "fp32" | "float32" => Ok(Self::Fp32),
             "fp16" | "float16" => Ok(Self::Fp16),
             "int8" => Ok(Self::Int8),
+            "q8" => Ok(Self::Q8),
             other => Err(anyhow!(
-                "precision must be 'auto', 'fp32', 'fp16' or 'int8', got '{other}'"
+                "precision must be 'auto', 'fp32', 'fp16', 'int8' or 'q8', got '{other}'"
             )),
         }
     }
@@ -187,6 +197,7 @@ impl Precision {
             Self::Fp32 => "fp32",
             Self::Fp16 => "fp16",
             Self::Int8 => "int8",
+            Self::Q8 => "q8",
         }
     }
 }
@@ -252,6 +263,12 @@ mod tests {
         assert_eq!(Precision::parse("INT8").unwrap(), Precision::Int8);
         assert_eq!(Precision::Int8.resolve(true), Precision::Int8);
         assert_eq!(Precision::Int8.resolve(false), Precision::Int8);
+        // q8 likewise: explicit opt-in, device-independent (activations
+        // stay fp32), Auto never yields it.
+        assert_eq!(Precision::parse("Q8").unwrap(), Precision::Q8);
+        assert_eq!(Precision::Q8.resolve(true), Precision::Q8);
+        assert_eq!(Precision::Q8.resolve(false), Precision::Q8);
+        assert_eq!(Precision::Q8.as_str(), "q8");
     }
 
     #[test]
