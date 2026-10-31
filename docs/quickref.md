@@ -39,9 +39,24 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval",
 m = JinaV5.open_files("model.onnx", "tokenizer.json")
 
 # what the registries hold (ids, kind=embed|rerank|decide, ladders,
-# precisions, vision text_partner; task rows leave vector-space keys empty)
+# precisions, vision text_partner; task rows leave vector-space keys empty;
+# + source=builtin|registered, measured=true|false on every row)
 from embroider import available_models
 available_models()
+
+# register a new model under a known kind (no source change):
+# kinds are rerank | decide | decide-laya | decide-2b (+ embed below)
+from embroider import register_task
+register_task("myorg/my-reranker", "rerank", 256,
+              {"repo": "myorg/my-reranker-onnx", "file": "onnx/model.onnx"},
+              q8={"repo": "myorg/my-reranker-q8-onnx", "file": "model_q8.onnx",
+                  "sidecar": "model_q8.onnx.data"},
+              provenance={"measured": False, "notes": "self-quant, bench pending"},
+              probe=True)
+# file form (strict schema, version-checked) + overlay export (sorted, round-trippable)
+from embroider import load_registry_file, export_registry
+load_registry_file("models/extra.json")   # {"registry_version": 1, "tasks": [...], "models": [...]}
+export_registry()
 ```
 
 `task` is load-bearing: `query` ↔ `Query:` prefix, `document` ↔

@@ -3,6 +3,39 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.12.0] — 2026-10-31
+
+### Added
+- Model registry surface, layer 1 (`src/acquire.rs`, Python
+  `register_task` / `register_model` / `load_registry_file` /
+  `export_registry` / `unregister_*`): owned spec twins
+  (`RegisteredTask` / `RegisteredModel` / `RegisteredArtifact` /
+  `Provenance`, serde strict) over a `RwLock` overlay consulted by
+  `resolve_task` / `resolve_model` after the frozen builtins. New
+  models under existing kinds (`rerank`, `decide`, `decide-laya`,
+  `decide-2b`, `embed`) with no source change; new input contracts
+  stay Rust (layer-2 boundary, refused at parse with a pointer).
+  Validated before any I/O (owner/name ids, kind ceilings, `.onnx`
+  + sidecar layout, kind `extra_files` extend-never-shrink,
+  decide-2b `.safetensors` requirement, embed ladder sanity);
+  builtin ids and duplicates refused loudly. `artifact_for_*` now
+  resolve to owned artifacts; every `open()` path (rerank, decide,
+  laya, decider-2b, jina, vision) takes the resolved spec, so
+  registered models flow through the same seams (ceilings,
+  prompt_first, sidecars, safetensors). Caller-supplied non-fp32
+  tiers run flagged-unmeasured (`available_models` shows `source` /
+  `measured`; `open()` warns with the entry's `registered_from`
+  attribution — `auto` never resolves to overlay non-fp32).
+  `register_*` take `probe=True` for an offline `cache_info` echo;
+  the JSON file form is `{"registry_version": 1, ...}` (v2 refused
+  loudly). README `### Registering models`, quickref snippet.
+- Revision pins on all 22 builtin artifacts (full SHAs, every
+  (repo, file, SHA) verified present via the HF API): `open()` and
+  `cache_info` default to the tier pin when the caller passes no
+  revision (caller `Some` always wins). Structural test asserts
+  every builtin tier carries `Some(revision)` — pins can no longer
+  rot in comments.
+
 ## [0.11.0] — 2026-10-30
 
 ### Added

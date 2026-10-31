@@ -126,6 +126,15 @@ Rules:
   (one lookup implementation); `CacheReport.precision` is now
   `Option<Precision>` (`None` for the generic surface — no consumer
   impact, dict keys unchanged).
+- **Registry surface + revision pins (0.12.0)**: `register_task` /
+  `register_model` / `load_registry_file` / `export_registry`
+  (Python) over a validated `RwLock` overlay (`src/acquire.rs`) —
+  new models under existing kinds with no source change, builtin ids
+  and duplicates refused, caller-supplied non-fp32 tiers run
+  flagged-unmeasured (`available_models` `source`/`measured`;
+  `open()` warns with attribution). All 22 builtin artifacts pinned
+  to verified full SHAs; `open()` and `cache_info` default to the
+  tier pin when the caller passes no revision.
 
 ## Model licences
 

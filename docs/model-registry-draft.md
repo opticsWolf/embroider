@@ -1,7 +1,6 @@
 # Model registry surface — draft
 
-Status: **implementing on dev** (0.11.0 era, layer 1 + revision pins
-landed; layer 2 deferred as designed). Problem: every model is a
+Status: **shipped in 0.12.0** (layer 1 + revision pins; layer 2 deferred as designed). Problem: every model is a
 `pub const` in `src/acquire.rs` (`TEXT_SMALL`, `RERANK_MINILM`,
 `GLICLASS_SMALL`, …) with `&'static` fields; `lookup_model` /
 `lookup_task` search the builtin slices only. Unknown ids get the
