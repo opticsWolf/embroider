@@ -18,7 +18,7 @@
 //! registry): only comparable against text-nano text vectors.
 
 use crate::acquire::{
-    artifact_for, fetch_tokenizer_file, hf_client, lookup_model, parse_owner_name,
+    artifact_for, fetch_tokenizer_file, hf_client, parse_owner_name, resolve_model, warn_if_unmeasured_model,
     VISION_NANO_MODEL,
 };
 use crate::error::{oe, Result};
@@ -365,9 +365,10 @@ impl JinaV5Vision {
     ) -> Result<Self> {
         // Registered ids validate against their own ladder (vision shares
         // the nano 768 ladder); unknown ids keep the frozen legacy check.
-        match lookup_model(model_id) {
+        let resolved = resolve_model(model_id);
+        match resolved.as_ref() {
             Some(spec) => {
-                check_truncate_dim_for(truncate_dim, spec.native_dim, spec.ladder)?;
+                check_truncate_dim_for(truncate_dim, spec.native_dim, &spec.ladder)?;
             }
             None => check_truncate_dim_for(
                 truncate_dim,
@@ -382,15 +383,19 @@ impl JinaV5Vision {
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = resolve_vision_precision(precision, used_cuda)?;
         let artifact = artifact_for(model_id, precision);
+        // Caller revision wins; otherwise the tier pin.
+        let rev = revision.map(str::to_string).or(artifact.revision.clone());
+        if let Some(spec) = resolved.as_ref() {
+            warn_if_unmeasured_model(spec, model_id, precision);
+        }
 
         // ---- acquisition (per-artifact file layout) ----
-        let (owner, name) = parse_owner_name(artifact.repo)?;
+        let (owner, name) = parse_owner_name(&artifact.repo)?;
         let client = hf_client(cache_dir.clone())?;
         let repo = client.model(owner, name);
-        let rev = revision.map(str::to_string);
         let onnx_path = repo
             .download_file()
-            .filename(artifact.file.to_string())
+            .filename(artifact.file.clone())
             .maybe_revision(rev.clone())
             .send()
             .map_err(|e| anyhow!("{} missing for '{}': {e}", artifact.file, artifact.repo))?;
@@ -398,7 +403,7 @@ impl JinaV5Vision {
             Some(sidecar) if repo
                 .download_file()
                 .filename(sidecar.clone())
-                .maybe_revision(rev)
+                .maybe_revision(rev.clone())
                 .send()
                 .is_err() =>
             {
@@ -411,7 +416,7 @@ impl JinaV5Vision {
             _ => {}
         }
         // ---- tokenizer: truncation permanently off (see load_vision_tokenizer) ----
-        let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
+        let tok_path = fetch_tokenizer_file(&artifact.repo, rev.as_deref(), cache_dir)?;
         let tokenizer = load_vision_tokenizer(&tok_path)?;
 
         let (session, used_cuda) = build_vision_session(&onnx_path, device, gpu_mem_limit)?;
@@ -438,10 +443,10 @@ impl JinaV5Vision {
         device: DeviceReq,
         gpu_mem_limit: Option<u64>,
     ) -> Result<Self> {
-        let ladder = lookup_model(VISION_NANO_MODEL)
+        let ladder = resolve_model(VISION_NANO_MODEL)
             .map(|s| s.ladder)
-            .unwrap_or(&[32, 64, 128, 256, 512, 768]);
-        check_truncate_dim_for(truncate_dim, VISION_NATIVE_DIM, ladder)?;
+            .unwrap_or(vec![32, 64, 128, 256, 512, 768]);
+        check_truncate_dim_for(truncate_dim, VISION_NATIVE_DIM, &ladder)?;
         if !onnx_path.is_file() {
             return Err(anyhow!("onnx model not found: {}", onnx_path.display()));
         }

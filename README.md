@@ -89,6 +89,24 @@ embroider at a compatible repo with no registry change. Fully local
 weights skip acquisition entirely — see
 [Running without downloads](#running-without-downloads).
 
+### Registering models
+
+New models under known kinds need no source change (`register_task` /
+`register_model`, or `load_registry_file("models/extra.json")` for
+the file form — `{"registry_version": 1, "tasks": [...],
+"models": [...]}`). Kinds are the existing ones (`rerank`,
+`decide`, `decide-laya`, `decide-2b`, `embed`); a new input contract
+still needs a Rust loader (see `docs/model-registry-draft.md`
+layer 2). Rules: ids must be `owner/name`, builtin ids and
+duplicates are refused loudly (mirrors take their own ids), unlisted
+precision tiers fall back to fp32, and caller-supplied non-fp32 tiers
+run flagged-unmeasured (`available_models` shows `source` /
+`measured`; `open()` at such a tier warns with the entry's
+`registered_from` attribution — the drift is the caller's gate).
+`export_registry()` dumps the overlay for round-tripping.
+`probe=True` runs an offline `cache_info` after registering and
+reports what `open()` would need.
+
 ## Install
 
 PyPI wheels (Linux / Windows / macOS-arm64, Python 3.11–3.13) — `okfgraph`

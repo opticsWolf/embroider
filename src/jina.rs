@@ -11,7 +11,7 @@
 //! Python router: CUDA is opportunistic, never fatal.
 
 use crate::acquire::{
-    artifact_for, fetch_tokenizer_file, hf_client, lookup_model, parse_owner_name,
+    artifact_for, fetch_tokenizer_file, hf_client, parse_owner_name, resolve_model, warn_if_unmeasured_model,
 };
 use crate::error::{oe, Result};
 use crate::policy::{
@@ -276,13 +276,14 @@ impl JinaV5 {
         // Per-model contract: registered ids validate against their own
         // ladder/ceiling (nano tops at 768 dim / 8192 ctx); unknown ids keep
         // the frozen legacy (text-small) validation.
-        match lookup_model(model_id) {
+        let resolved = resolve_model(model_id);
+        match resolved.as_ref() {
             Some(spec) => {
-                check_truncate_dim_for(truncate_dim, spec.native_dim, spec.ladder)?;
+                check_truncate_dim_for(truncate_dim, spec.native_dim, &spec.ladder)?;
             }
             None => check_truncate_dim(truncate_dim)?,
         }
-        let ceiling = lookup_model(model_id).map(|s| s.max_tokens).unwrap_or(MODEL_MAX_TOKENS);
+        let ceiling = resolved.as_ref().map(|s| s.max_tokens).unwrap_or(MODEL_MAX_TOKENS);
         let max_length = check_max_length_for(max_length, ceiling)?;
 
         // Resolve the device BEFORE acquisition: precision follows the
@@ -302,15 +303,19 @@ impl JinaV5 {
         // Precision selects the acquisition artifact from the registry.
         // Unknown ids take the legacy path (id = fp32 repo, default file).
         let artifact = artifact_for(model_id, precision);
+        // Caller revision wins; otherwise the tier pin.
+        let rev = revision.map(str::to_string).or(artifact.revision.clone());
 
         // ---- model acquisition (per-artifact file layout) ----
-        let (owner, name) = parse_owner_name(artifact.repo)?;
+        let (owner, name) = parse_owner_name(&artifact.repo)?;
         let client = hf_client(cache_dir.clone())?;
         let repo = client.model(owner, name);
-        let rev = revision.map(str::to_string);
+        if let Some(spec) = resolved.as_ref() {
+            warn_if_unmeasured_model(spec, model_id, precision);
+        }
         let onnx_path = repo
             .download_file()
-            .filename(artifact.file.to_string())
+            .filename(artifact.file.clone())
             .maybe_revision(rev.clone())
             .send()
             .map_err(|e| anyhow!("{} missing for '{}': {e}", artifact.file, artifact.repo))?;
@@ -322,7 +327,7 @@ impl JinaV5 {
             Some(sidecar) if repo
                 .download_file()
                 .filename(sidecar.clone())
-                .maybe_revision(rev)
+                .maybe_revision(rev.clone())
                 .send()
                 .is_err() =>
             {
@@ -331,7 +336,7 @@ impl JinaV5 {
             _ => {}
         }
         // ---- tokenizer (no padding here; single-doc encodes need none) ----
-        let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
+        let tok_path = fetch_tokenizer_file(&artifact.repo, rev.as_deref(), cache_dir)?;
         let tokenizer = load_tokenizer(&tok_path, Some(max_length))?;
 
         let loaded =

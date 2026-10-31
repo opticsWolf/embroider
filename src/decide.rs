@@ -16,7 +16,8 @@
 //! the question and are never cut to fit the state.
 
 use crate::acquire::{
-    artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name, TaskKind,
+    artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name, resolve_task,
+    warn_if_unmeasured_task, TaskKind,
 };
 use crate::error::{oe, Result};
 use crate::jina::{build_session, count_tokens_in, load_tokenizer, special_id};
@@ -202,20 +203,20 @@ impl Decider {
         // Marker-layout checkpoints are refused with a pointer — feeding
         // a Laya graph to the 2-input GLiClass path would fail late and
         // loud instead of routing to the right type now.
-        if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::DecideLaya) {
+        if resolve_task(model_id).map(|s| s.kind) == Some(TaskKind::DecideLaya) {
             return Err(anyhow!(
                 "'{model_id}' is a marker-layout Laya checkpoint, served by LayaDecider — Decider serves the GLiClass-layout tasks only"
             ));
         }
         // Slot-layout checkpoint, same story: the 2-input GLiClass path
         // cannot feed (input_ids, slot_pos).
-        if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::Decide2B) {
+        if resolve_task(model_id).map(|s| s.kind) == Some(TaskKind::Decide2B) {
             return Err(anyhow!(
                 "'{model_id}' is a slot-layout decider-2b checkpoint, served by Decider2B — Decider serves the GLiClass-layout tasks only"
             ));
         }
         let ceiling =
-            lookup_task(model_id).map(|s| s.max_tokens).unwrap_or(DECIDE_DEFAULT_MAX);
+            resolve_task(model_id).map(|s| s.max_tokens).unwrap_or(DECIDE_DEFAULT_MAX);
         let max_length = check_decide_limit_for(max_length, ceiling)?;
 
         // Same device→precision ordering as JinaV5/Reranker: precision
@@ -232,26 +233,29 @@ impl Decider {
         // Precision selects the acquisition artifact from the task registry.
         // Unknown ids take the legacy path (id = fp32 repo, default file).
         let artifact = artifact_for_task(model_id, precision);
+        if let Some(spec) = resolve_task(model_id) {
+            warn_if_unmeasured_task(&spec, model_id, precision);
+        }
 
         // ---- model acquisition (per-artifact file layout) ----
         // No sidecar probe: the spike artifact is B0-verified single-file
         // (ORT loads it standalone); a future external-data export fails
         // loudly at session load instead.
-        let (owner, name) = parse_owner_name(artifact.repo)?;
+        let (owner, name) = parse_owner_name(&artifact.repo)?;
         let client = hf_client(cache_dir.clone())?;
         let repo = client.model(owner, name);
-        let rev = revision.map(str::to_string);
+        let rev = revision.map(str::to_string).or(artifact.revision.clone());
         let onnx_path = repo
             .download_file()
-            .filename(artifact.file.to_string())
-            .maybe_revision(rev)
+            .filename(artifact.file.clone())
+            .maybe_revision(rev.clone())
             .send()
             .map_err(|e| anyhow!("{} missing for '{}': {e}", artifact.file, artifact.repo))?;
         // ---- tokenizer (no truncation policy — truncation is manual,
         // state-side-first, per call) ----
-        let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
+        let tok_path = fetch_tokenizer_file(&artifact.repo, rev.as_deref(), cache_dir)?;
         // Registry layout; unknown ids take the text-first standard.
-        let prompt_first = lookup_task(model_id).map(|s| s.prompt_first).unwrap_or(false);
+        let prompt_first = resolve_task(model_id).map(|s| s.prompt_first).unwrap_or(false);
         Self::from_files(&onnx_path, &tok_path, model_id, device, max_length, prompt_first, precision, cpu_arena)
     }
 

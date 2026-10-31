@@ -47,7 +47,8 @@ use anyhow::{anyhow, Result};
 use ndarray::Array2;
 
 use crate::acquire::{
-    artifact_for_task, fetch_repo_file, lookup_task, TaskKind, DECIDER2B_MODEL,
+    artifact_for_task, fetch_repo_file, resolve_task, warn_if_unmeasured_task, RegistrySource,
+    TaskKind, DECIDER2B_MODEL,
 };
 use crate::error::oe;
 use crate::jina::{count_tokens_in, load_tokenizer};
@@ -699,7 +700,7 @@ impl Decider2B {
         precision: Precision,
         cpu_arena: bool,
     ) -> Result<Self> {
-        let spec = lookup_task(model_id).ok_or_else(|| {
+        let spec = resolve_task(model_id).ok_or_else(|| {
             anyhow!(
                 "unknown decider-2b model '{model_id}'; the registered checkpoint is Mapika/decider-2b (explicit files via open_files)"
             )
@@ -721,10 +722,13 @@ impl Decider2B {
         let artifact = artifact_for_task(model_id, precision);
 
         // ---- acquisition (artifact repo holds all five files) ----
+        let rev = revision.map(str::to_string).or(artifact.revision.clone());
+        let rev_ref = rev.as_deref();
         let onnx_path =
-            fetch_repo_file(artifact.repo, artifact.file, revision, cache_dir.clone())?;
+            fetch_repo_file(&artifact.repo, &artifact.file, rev_ref, cache_dir.clone())?;
+        warn_if_unmeasured_task(&spec, model_id, precision);
         if let Some(sidecar) = artifact.sidecar() {
-            match fetch_repo_file(artifact.repo, &sidecar, revision, cache_dir.clone()) {
+            match fetch_repo_file(&artifact.repo, &sidecar, rev_ref, cache_dir.clone()) {
                 Ok(_) => {}
                 Err(e) => eprintln!("embroider: no {sidecar} sidecar; assuming inline weights ({e})"),
             }
@@ -732,14 +736,24 @@ impl Decider2B {
         // q8 keeps embeddings/head/norms in the vendored safetensors —
         // fetch it alongside the q8 sidecar (same repo, same revision).
         if precision == Precision::Q8 {
-            fetch_repo_file(artifact.repo, "model.safetensors", revision, cache_dir.clone())?;
+            let weights = if spec.source == RegistrySource::Builtin {
+                "model.safetensors".to_string()
+            } else {
+                spec.extra_files.iter().find(|f| f.ends_with(".safetensors")).cloned().ok_or_else(|| {
+                    anyhow!(
+                        "registered decider-2b task '{}' (from {}) names no .safetensors weights file in extra_files",
+                        model_id, spec.registered_from
+                    )
+                })?
+            };
+            fetch_repo_file(&artifact.repo, &weights, rev_ref, cache_dir.clone())?;
         }
         let tok_path =
-            fetch_repo_file(artifact.repo, "tokenizer.json", revision, cache_dir.clone())?;
+            fetch_repo_file(&artifact.repo, "tokenizer.json", rev_ref, cache_dir.clone())?;
         let decision_path =
-            fetch_repo_file(artifact.repo, "decision.json", revision, cache_dir.clone())?;
+            fetch_repo_file(&artifact.repo, "decision.json", rev_ref, cache_dir.clone())?;
         let calib_path =
-            fetch_repo_file(artifact.repo, "calibration.json", revision, cache_dir)?;
+            fetch_repo_file(&artifact.repo, "calibration.json", rev_ref, cache_dir)?;
         Self::from_files(
             &onnx_path,
             &tok_path,

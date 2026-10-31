@@ -8,8 +8,10 @@
 use crate::error::Result;
 use crate::policy::Precision;
 use anyhow::anyhow;
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, RwLock};
 
 /// Default FP32 weights (Jina's official optimum export).
 pub const FP32_TEXT_MODEL: &str = "jinaai/jina-embeddings-v5-text-small-retrieval";
@@ -55,6 +57,11 @@ pub struct Artifact<'a> {
     /// optimum layout (`onnx/model_fp16.onnx` → `onnx/model_fp16.onnx_data`);
     /// `Some` names it verbatim (the vision export's `model.onnx.data`).
     pub sidecar: Option<&'a str>,
+    /// Pinned commit SHA the artifact was parity-gated at. `open()` uses
+    /// it when the caller passes no revision (caller `Some` always wins);
+    /// `None` means floating latest — allowed only while a pin is being
+    /// established, never as a steady state (structural test below).
+    pub revision: Option<&'a str>,
 }
 
 impl Artifact<'_> {
@@ -96,8 +103,8 @@ pub const TEXT_SMALL: ModelSpec = ModelSpec {
     native_dim: 1024,
     max_tokens: 32768,
     ladder: &[32, 64, 128, 256, 512, 768, 1024],
-    fp32: Artifact { repo: FP32_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None },
-    fp16: Some(Artifact { repo: FP16_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None }),
+    fp32: Artifact { repo: FP32_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("6856e76bb72982e58de0620458a4e8b3614da340") },
+    fp16: Some(Artifact { repo: FP16_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("b79c38889bee6a84dd7b36c0df206afa420f4f9f") }),
     int8: None, // killed in the quant spike @0.93 drift — never shipped
     text_partner: None,
 };
@@ -107,9 +114,9 @@ pub const TEXT_NANO: ModelSpec = ModelSpec {
     native_dim: 768,
     max_tokens: 8192,
     ladder: &[32, 64, 128, 256, 512, 768],
-    fp32: Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None },
-    fp16: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_fp16.onnx", sidecar: None }),
-    int8: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_quantized.onnx", sidecar: None }),
+    fp32: Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("ac5d898c8d382b17167c33e5c8af644a3519b47d") },
+    fp16: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_fp16.onnx", sidecar: None, revision: Some("ac5d898c8d382b17167c33e5c8af644a3519b47d") }),
+    int8: Some(Artifact { repo: NANO_TEXT_MODEL, file: "onnx/model_quantized.onnx", sidecar: None, revision: Some("ac5d898c8d382b17167c33e5c8af644a3519b47d") }),
     text_partner: None,
 };
 
@@ -130,11 +137,13 @@ pub const VISION_NANO: ModelSpec = ModelSpec {
         repo: VISION_NANO_REPO,
         file: "fp32/model.onnx",
         sidecar: Some("fp32/model.onnx.data"),
+        revision: Some("95c7be07d81ded60cd105727ed9ba2d04003692d"),
     },
     fp16: Some(Artifact {
         repo: VISION_NANO_REPO,
         file: "fp16/model.onnx",
         sidecar: Some("fp16/model.onnx.data"),
+        revision: Some("95c7be07d81ded60cd105727ed9ba2d04003692d"),
     }),
     int8: None,
     text_partner: Some(NANO_TEXT_MODEL),
@@ -156,7 +165,8 @@ pub fn lookup_model(model_id: &str) -> Option<ModelSpec> {
 /// What a task model does. Embedding specs carry vector-space metadata
 /// (`native_dim`, `ladder`); task specs don't — scores and decisions
 /// have no dimension to truncate, only a positional ceiling.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum TaskKind {
     Rerank,
     Decide,
@@ -178,6 +188,46 @@ impl TaskKind {
             TaskKind::DecideLaya => "decide-laya",
             TaskKind::Decide2B => "decide-2b",
         }
+    }
+
+    /// Parse a registry `kind` string (file or API). Unknown kinds are
+    /// refused with a pointer at the layer-2 boundary: a new input
+    /// contract needs a Rust loader, not a registry row.
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "rerank" => Ok(TaskKind::Rerank),
+            "decide" => Ok(TaskKind::Decide),
+            "decide-laya" | "decidelaya" | "laya" => Ok(TaskKind::DecideLaya),
+            "decide-2b" | "decide2b" | "decider2b" => Ok(TaskKind::Decide2B),
+            other => Err(anyhow!(
+                "unknown task kind '{other}': expected 'rerank', 'decide', \
+                 'decide-laya' or 'decide-2b' — a new input contract needs a \
+                 Rust loader (see docs/model-registry-draft.md layer 2), not a registry row"
+            )),
+        }
+    }
+}
+
+/// Absolute per-kind ceiling for registered `max_tokens`: no overlay
+/// entry may exceed the largest builtin of its kind (session, policy
+/// and export bounds assume it — e.g. `LAYA_ABSOLUTE_MAX` is baked
+/// into the traced exports). Builtins keep their own ceilings.
+pub fn kind_ceiling(kind: TaskKind) -> usize {
+    match kind {
+        TaskKind::Rerank => 512,
+        TaskKind::Decide => 2048,
+        TaskKind::DecideLaya => 1024,
+        TaskKind::Decide2B => 32768,
+    }
+}
+
+/// Required config files beyond graph + tokenizer, per kind. Callers
+/// may extend, never shrink (validated at registration).
+pub fn kind_extra_files(kind: TaskKind) -> &'static [&'static str] {
+    match kind {
+        TaskKind::Rerank | TaskKind::Decide => &[],
+        TaskKind::DecideLaya => &["rl_agent_config.json"],
+        TaskKind::Decide2B => &["decision.json", "calibration.json"],
     }
 }
 
@@ -212,13 +262,14 @@ pub const RERANK_MINILM: TaskSpec = TaskSpec {
     kind: TaskKind::Rerank,
     max_tokens: 512,
     prompt_first: false,
-    fp32: Artifact { repo: RERANK_MINILM_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp32: Artifact { repo: RERANK_MINILM_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("233902d25c440f23af6f7d6e94d2946bac0bee0a") },
     fp16: None,
     int8: None,
     q8: Some(Artifact {
         repo: "opticsWolf/ms-marco-MiniLM-L-6-v2-q8-onnx",
         file: "model_q8.onnx",
         sidecar: Some("model_q8.onnx.data"),
+        revision: Some("98b39029a16a2c3f4e881119755a6d24cea51b10"),
     }),
 };
 
@@ -231,13 +282,14 @@ pub const RERANK_MMARCO: TaskSpec = TaskSpec {
     kind: TaskKind::Rerank,
     max_tokens: 512,
     prompt_first: false,
-    fp32: Artifact { repo: RERANK_MMARCO_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp32: Artifact { repo: RERANK_MMARCO_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("1427fd652930e4ba29e8149678df786c240d8825") },
     fp16: None,
     int8: None,
     q8: Some(Artifact {
         repo: "opticsWolf/mmarco-mMiniLMv2-L12-H384-v1-q8-onnx",
         file: "model_q8.onnx",
         sidecar: Some("model_q8.onnx.data"),
+        revision: Some("4230967c48f473f9941f6aa3aa86c6e0d9a80fbc"),
     }),
 };
 
@@ -252,7 +304,7 @@ pub const GLICLASS_SMALL: TaskSpec = TaskSpec {
     kind: TaskKind::Decide,
     max_tokens: 512,
     prompt_first: false,
-    fp32: Artifact { repo: GLICLASS_SMALL_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp32: Artifact { repo: GLICLASS_SMALL_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("21edefaf7951f68c68c505f9139ba536d3b448f7") },
     fp16: None,
     int8: None,
     // No q8: the weight-only build flips 2 knife-edge travel cases
@@ -276,13 +328,14 @@ pub const GLICLASS_V4_EDGE: TaskSpec = TaskSpec {
     kind: TaskKind::Decide,
     max_tokens: 2048,
     prompt_first: true,
-    fp32: Artifact { repo: GLICLASS_V4_EDGE_MODEL, file: "onnx/model.onnx", sidecar: None },
+    fp32: Artifact { repo: GLICLASS_V4_EDGE_MODEL, file: "onnx/model.onnx", sidecar: None, revision: Some("885af1af8a07edf4ed34df83ca0d995ed8201283") },
     fp16: None,
     int8: None,
     q8: Some(Artifact {
         repo: "opticsWolf/gliclass-v4-edge-q8-onnx",
         file: "model_q8.onnx",
         sidecar: Some("model_q8.onnx.data"),
+        revision: Some("b1fd271a14b8bd69c70b494e167d494c9b0e5235"),
     }),
 };
 
@@ -334,6 +387,7 @@ pub const LAYA_TD: TaskSpec = TaskSpec {
         repo: "opticsWolf/laya-typed-decisions-fp32-onnx",
         file: "laya-td-fp32.onnx",
         sidecar: Some("laya-td-fp32.onnx.data"),
+        revision: Some("fa9cac92fbb1914b3ac0f4a2a8b2ec244444db98"),
     },
     fp16: None,
     int8: None,
@@ -341,6 +395,7 @@ pub const LAYA_TD: TaskSpec = TaskSpec {
         repo: "opticsWolf/laya-typed-decisions-fp32-onnx",
         file: "laya-td-q8.onnx",
         sidecar: Some("laya-td-q8.onnx.data"),
+        revision: Some("fa9cac92fbb1914b3ac0f4a2a8b2ec244444db98"),
     }),
 };
 
@@ -353,6 +408,7 @@ pub const LAYA_BASE: TaskSpec = TaskSpec {
         repo: "opticsWolf/laya-english-fp32-onnx",
         file: "laya-base-fp32.onnx",
         sidecar: Some("laya-base-fp32.onnx.data"),
+        revision: Some("26dbfc689b8cdaf30cb5870206c463a492da2f26"),
     },
     fp16: None,
     int8: None,
@@ -360,6 +416,7 @@ pub const LAYA_BASE: TaskSpec = TaskSpec {
         repo: "opticsWolf/laya-english-fp32-onnx",
         file: "laya-base-q8.onnx",
         sidecar: Some("laya-base-q8.onnx.data"),
+        revision: Some("26dbfc689b8cdaf30cb5870206c463a492da2f26"),
     }),
 };
 
@@ -372,6 +429,7 @@ pub const LAYA_MULTI: TaskSpec = TaskSpec {
         repo: "opticsWolf/laya-multilingual-fp32-onnx",
         file: "laya-multi-fp32.onnx",
         sidecar: Some("laya-multi-fp32.onnx.data"),
+        revision: Some("a20896963b9bd0216ba33b20d699bc9e1a716734"),
     },
     fp16: None,
     int8: None,
@@ -379,6 +437,7 @@ pub const LAYA_MULTI: TaskSpec = TaskSpec {
         repo: "opticsWolf/laya-multilingual-fp32-onnx",
         file: "laya-multi-q8.onnx",
         sidecar: Some("laya-multi-q8.onnx.data"),
+        revision: Some("a20896963b9bd0216ba33b20d699bc9e1a716734"),
     }),
 };
 
@@ -403,6 +462,7 @@ pub const DECIDER2B: TaskSpec = TaskSpec {
         repo: "opticsWolf/decider-2b-fp32-onnx",
         file: "model.onnx",
         sidecar: Some("model.safetensors"),
+        revision: Some("a951b9fe4647f8d6defb4ff0c66b7511960b101d"),
     },
     fp16: None,
     int8: None,
@@ -412,6 +472,7 @@ pub const DECIDER2B: TaskSpec = TaskSpec {
         repo: "opticsWolf/decider-2b-fp32-onnx",
         file: "model_q8.onnx",
         sidecar: Some("model_q8.onnx.data"),
+        revision: Some("a951b9fe4647f8d6defb4ff0c66b7511960b101d"),
     }),
 };
 
@@ -437,19 +498,604 @@ pub fn lookup_task(model_id: &str) -> Option<TaskSpec> {
     builtin_tasks().iter().find(|m| m.id == model_id).copied()
 }
 
+/// Where a resolved spec came from: frozen consts or the overlay.
+/// Surfaced in `available_models()` so consumers can key off it
+/// without parsing ids.
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistrySource {
+    Builtin,
+    Registered,
+}
+
+impl RegistrySource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RegistrySource::Builtin => "builtin",
+            RegistrySource::Registered => "registered",
+        }
+    }
+}
+
+/// Machine-readable provenance (JSON has no comments, so the drift
+/// numbers and gate notes this repo keeps in comments become fields).
+/// Serialized verbatim into `available_models()`; `open()` warns from
+/// `measured: false`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Provenance {
+    pub measured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worst_drift: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flips: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+impl Provenance {
+    /// Builtin tiers: measured by construction (the parity gates).
+    pub fn measured() -> Self {
+        Self { measured: true, worst_drift: None, flips: None, harness: None, notes: None }
+    }
+
+    /// Overlay default: unmeasured until the caller claims otherwise
+    /// (flagged-allow policy — the claim rides the entry, the warning
+    /// rides `open()`).
+    pub fn unclaimed() -> Self {
+        Self { measured: false, worst_drift: None, flips: None, harness: None, notes: None }
+    }
+}
+
+impl Default for Provenance {
+    fn default() -> Self {
+        Self::unclaimed()
+    }
+}
+
+/// Owned twin of [`Artifact`]: the same acquisition contract with heap
+/// strings, so registry files and API calls can build it at runtime.
+/// `sidecar` follows [`Artifact::sidecar`] semantics.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisteredArtifact {
+    pub repo: String,
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidecar: Option<String>,
+    /// Pinned commit SHA the tier was gated at. `open()` uses it when
+    /// the caller passes no revision (caller `Some` always wins).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+/// Owned twin of [`TaskSpec`]: everything `open()` needs beyond the id,
+/// buildable at runtime. `kind` is an existing [`TaskKind`] only —
+/// unknown kinds are refused at parse (layer-2 boundary).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisteredTask {
+    pub id: String,
+    pub kind: TaskKind,
+    pub max_tokens: usize,
+    #[serde(default)]
+    pub prompt_first: bool,
+    pub fp32: RegisteredArtifact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp16: Option<RegisteredArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub int8: Option<RegisteredArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q8: Option<RegisteredArtifact>,
+    #[serde(default)]
+    pub provenance: Provenance,
+    /// Assigned by the registration front door (`"api"` or
+    /// `"path#index"`), always overwritten there, and named in
+    /// `open()` warnings.
+    #[serde(default)]
+    pub registered_from: String,
+    /// Caller-supplied config files beyond the kind defaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_files: Vec<String>,
+}
+
+/// Owned twin of [`ModelSpec`], minus the q8 tier (no embed q8 exists).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegisteredModel {
+    pub id: String,
+    pub native_dim: usize,
+    pub max_tokens: usize,
+    pub ladder: Vec<usize>,
+    pub fp32: RegisteredArtifact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fp16: Option<RegisteredArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub int8: Option<RegisteredArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_partner: Option<String>,
+    #[serde(default)]
+    pub provenance: Provenance,
+    #[serde(default)]
+    pub registered_from: String,
+}
+
+/// Absolute ceiling for registered embed `max_tokens` (no kind axis on
+/// the embed side; builtins keep their own ceilings).
+const EMBED_ABSOLUTE_MAX: usize = 32768;
+
+/// Runtime overlay: validated entries only (see `validate_task` /
+/// `validate_model`). Builtins are consulted first and can never be
+/// shadowed — the frozen contract means a builtin id resolves
+/// identically in every process.
+static TASK_OVERLAY: LazyLock<RwLock<HashMap<String, RegisteredTask>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+static MODEL_OVERLAY: LazyLock<RwLock<HashMap<String, RegisteredModel>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+fn validate_artifact(where_: &str, a: &RegisteredArtifact) -> Result<()> {
+    parse_owner_name(&a.repo).map_err(|e| anyhow!("{where_}: bad repo: {e}"))?;
+    if !a.file.ends_with(".onnx") {
+        return Err(anyhow!("{where_}: artifact file must end in .onnx, got '{}'", a.file));
+    }
+    if let Some(sc) = a.sidecar.as_deref() {
+        if !(sc.ends_with(".data") || sc.ends_with("_data") || sc.ends_with(".safetensors")) {
+            return Err(anyhow!(
+                "{where_}: sidecar must end in .data, _data or .safetensors, got '{sc}'"
+            ));
+        }
+    }
+    if let Some(rev) = a.revision.as_deref() {
+        if rev.trim().is_empty() || rev.chars().any(char::is_whitespace) {
+            return Err(anyhow!("{where_}: revision must be a non-empty ref/SHA, got '{rev}'"));
+        }
+    }
+    Ok(())
+}
+
+/// Validate a task entry before it touches the overlay: id shape, kind
+/// ceiling, artifact layouts, kind file contract. No I/O — validation
+/// is data, downloading is `open()`'s job. `prompt_first` on a
+/// non-`Decide` kind warns (the marker/slot layouts are intrinsic —
+/// the flag would be a lie) but registers: warn, don't refuse.
+pub fn validate_task(entry: &RegisteredTask) -> Result<()> {
+    // Overlay ids must be `owner/name` — no short-id exception (the
+    // builtin vision short id is grandfathered, not a pattern).
+    parse_owner_name(&entry.id)
+        .map_err(|e| anyhow!("task id must be 'owner/name', got '{}': {e}", entry.id))?;
+    let ceiling = kind_ceiling(entry.kind);
+    if entry.max_tokens == 0 || entry.max_tokens > ceiling {
+        return Err(anyhow!(
+            "task '{}': max_tokens {} outside 1..={} for kind '{}'",
+            entry.id, entry.max_tokens, ceiling, entry.kind.as_str()
+        ));
+    }
+    validate_artifact(&format!("task '{}' fp32", entry.id), &entry.fp32)?;
+    for (tier, art) in [("fp16", &entry.fp16), ("int8", &entry.int8), ("q8", &entry.q8)]
+        .into_iter()
+        .filter_map(|(t, a)| a.as_ref().map(|a| (t, a)))
+    {
+        validate_artifact(&format!("task '{}' {tier}", entry.id), art)?;
+    }
+    if entry.prompt_first && entry.kind != TaskKind::Decide {
+        eprintln!(
+            "embroider: task '{}' sets prompt_first on kind '{}' — the marker/slot \
+             layouts are intrinsic, the flag has no effect and is ignored",
+            entry.id, entry.kind.as_str()
+        );
+    }
+    for need in kind_extra_files(entry.kind) {
+        if !entry.extra_files.iter().any(|f| f == need) {
+            return Err(anyhow!(
+                "task '{}': kind '{}' requires '{need}' in extra_files (defaults apply — \
+                 extend, never shrink)",
+                entry.id, entry.kind.as_str()
+            ));
+        }
+    }
+    // The q8 fetch seam for the slot layout reads the weights file out
+    // of extra_files (see Decider2B::open) — require it up front.
+    if entry.kind == TaskKind::Decide2B
+        && !entry.extra_files.iter().any(|f| f.ends_with(".safetensors"))
+    {
+        return Err(anyhow!(
+            "task '{}': kind 'decide-2b' requires a .safetensors weights file in extra_files \
+             (embeddings/head/norms live outside the q8 graph)",
+            entry.id
+        ));
+    }
+    Ok(())
+}
+
+/// Validate an embed entry: id shape, positive dims, a sane ladder
+/// (non-empty, strictly ascending, within `native_dim`), artifact
+/// layouts. `text_partner` may forward-reference an id registered
+/// later — no existence check.
+pub fn validate_model(entry: &RegisteredModel) -> Result<()> {
+    parse_owner_name(&entry.id)
+        .map_err(|e| anyhow!("model id must be 'owner/name', got '{}': {e}", entry.id))?;
+    if entry.native_dim == 0 {
+        return Err(anyhow!("model '{}': native_dim must be positive", entry.id));
+    }
+    if entry.max_tokens == 0 || entry.max_tokens > EMBED_ABSOLUTE_MAX {
+        return Err(anyhow!(
+            "model '{}': max_tokens {} outside 1..={EMBED_ABSOLUTE_MAX}",
+            entry.id, entry.max_tokens
+        ));
+    }
+    if entry.ladder.is_empty()
+        || entry.ladder.windows(2).any(|w| w[0] >= w[1])
+        || entry.ladder.iter().any(|&d| d == 0 || d > entry.native_dim)
+    {
+        return Err(anyhow!(
+            "model '{}': ladder must be non-empty, strictly ascending and within native_dim {}",
+            entry.id, entry.native_dim
+        ));
+    }
+    validate_artifact(&format!("model '{}' fp32", entry.id), &entry.fp32)?;
+    for (tier, art) in [("fp16", &entry.fp16), ("int8", &entry.int8)]
+        .into_iter()
+        .filter_map(|(t, a)| a.as_ref().map(|a| (t, a)))
+    {
+        validate_artifact(&format!("model '{}' {tier}", entry.id), art)?;
+    }
+    Ok(())
+}
+
+/// Register a validated task entry. Refuses builtin ids and duplicate
+/// registrations loudly — shadowing would fork the frozen contract.
+/// `registered_from` defaults to `"api"` when the caller leaves it
+/// empty (the file loader stamps `"path#index"`).
+pub fn register_task(mut entry: RegisteredTask) -> Result<RegisteredTask> {
+    validate_task(&entry)?;
+    if lookup_task(&entry.id).is_some() {
+        return Err(anyhow!(
+            "cannot register task '{}': a builtin model owns this id — mirrors take their own ids \
+             (the opticsWolf/*-q8-onnx convention)",
+            entry.id
+        ));
+    }
+    if entry.registered_from.is_empty() {
+        entry.registered_from = "api".to_string();
+    }
+    let mut overlay = TASK_OVERLAY.write().map_err(|e| anyhow!("task registry lock: {e}"))?;
+    if overlay.contains_key(&entry.id) {
+        return Err(anyhow!("task '{}' is already registered", entry.id));
+    }
+    overlay.insert(entry.id.clone(), entry.clone());
+    Ok(entry)
+}
+
+/// Register a validated embed entry (same shadowing rule as tasks).
+pub fn register_model(mut entry: RegisteredModel) -> Result<RegisteredModel> {
+    validate_model(&entry)?;
+    if lookup_model(&entry.id).is_some() {
+        return Err(anyhow!(
+            "cannot register model '{}': a builtin model owns this id — mirrors take their own ids",
+            entry.id
+        ));
+    }
+    if entry.registered_from.is_empty() {
+        entry.registered_from = "api".to_string();
+    }
+    let mut overlay = MODEL_OVERLAY.write().map_err(|e| anyhow!("model registry lock: {e}"))?;
+    if overlay.contains_key(&entry.id) {
+        return Err(anyhow!("model '{}' is already registered", entry.id));
+    }
+    overlay.insert(entry.id.clone(), entry.clone());
+    Ok(entry)
+}
+
+/// Remove an overlay task entry. Test/correction seam (statics persist
+/// across tests in one process); builtins are not removable.
+pub fn unregister_task(model_id: &str) -> bool {
+    TASK_OVERLAY.write().map(|mut o| o.remove(model_id).is_some()).unwrap_or(false)
+}
+
+/// Remove an overlay embed entry (same test/correction seam).
+pub fn unregister_model(model_id: &str) -> bool {
+    MODEL_OVERLAY.write().map(|mut o| o.remove(model_id).is_some()).unwrap_or(false)
+}
+
+/// Owned acquisition artifact: the same contract as [`Artifact`] with
+/// heap strings, so builtin consts and overlay entries resolve through
+/// one type. `revision` is the tier pin `open()` defaults to when the
+/// caller passes none.
+#[derive(Clone, Debug)]
+pub struct ResolvedArtifact {
+    pub repo: String,
+    pub file: String,
+    pub sidecar: Option<String>,
+    pub revision: Option<String>,
+}
+
+impl ResolvedArtifact {
+    /// Sidecar filename, same rule as [`Artifact::sidecar`].
+    pub fn sidecar(&self) -> Option<String> {
+        if let Some(explicit) = self.sidecar.as_deref() {
+            return Some(explicit.to_string());
+        }
+        self.file.strip_suffix(".onnx").map(|stem| format!("{stem}.onnx_data"))
+    }
+}
+
+impl From<Artifact<'static>> for ResolvedArtifact {
+    fn from(a: Artifact<'static>) -> Self {
+        Self {
+            repo: a.repo.to_string(),
+            file: a.file.to_string(),
+            sidecar: a.sidecar.map(str::to_string),
+            revision: a.revision.map(str::to_string),
+        }
+    }
+}
+
+impl From<&RegisteredArtifact> for ResolvedArtifact {
+    fn from(a: &RegisteredArtifact) -> Self {
+        Self {
+            repo: a.repo.clone(),
+            file: a.file.clone(),
+            sidecar: a.sidecar.clone(),
+            revision: a.revision.clone(),
+        }
+    }
+}
+
+/// Owned resolution of a task id: builtins convert, overlay clones.
+/// `open()` paths take this instead of `lookup_task` so registered
+/// models flow through the same seams (ceilings, artifacts, sidecars).
+#[derive(Clone, Debug)]
+pub struct ResolvedTask {
+    pub kind: TaskKind,
+    pub max_tokens: usize,
+    pub prompt_first: bool,
+    pub fp32: ResolvedArtifact,
+    pub fp16: Option<ResolvedArtifact>,
+    pub int8: Option<ResolvedArtifact>,
+    pub q8: Option<ResolvedArtifact>,
+    pub extra_files: Vec<String>,
+    pub source: RegistrySource,
+    pub measured: bool,
+    /// `"builtin"`, `"api"` or `"path#index"` — named in warnings.
+    pub registered_from: String,
+}
+
+/// Warn when a session runs caller-supplied weights: registered +
+/// unmeasured + a non-fp32 tier. fp32 is byte-exact serving (no drift
+/// claim involved), so the safe default stays quiet; quant tiers carry
+/// the caller's gate, stated here with the entry's attribution.
+fn warn_if_unmeasured(source: RegistrySource, measured: bool, from: &str, model_id: &str, precision: Precision) {
+    if source == RegistrySource::Registered && !measured && precision != Precision::Fp32 {
+        eprintln!(
+            "embroider: '{model_id}' at precision '{}' is caller-supplied (registered from {from}, measured: false) — \
+             the drift is the caller's gate, not a parity pin",
+            precision.as_str()
+        );
+    }
+}
+
+/// Task-side unmeasured-tier warning (see above).
+pub fn warn_if_unmeasured_task(spec: &ResolvedTask, model_id: &str, precision: Precision) {
+    warn_if_unmeasured(spec.source, spec.measured, &spec.registered_from, model_id, precision);
+}
+
+/// Embed-side unmeasured-tier warning (same policy as tasks).
+pub fn warn_if_unmeasured_model(spec: &ResolvedModel, model_id: &str, precision: Precision) {
+    warn_if_unmeasured(spec.source, spec.measured, &spec.registered_from, model_id, precision);
+}
+
+/// Owned resolution of an embed id (builtins convert, overlay clones).
+#[derive(Clone, Debug)]
+pub struct ResolvedModel {
+    pub native_dim: usize,
+    pub max_tokens: usize,
+    pub ladder: Vec<usize>,
+    pub fp32: ResolvedArtifact,
+    pub fp16: Option<ResolvedArtifact>,
+    pub int8: Option<ResolvedArtifact>,
+    pub text_partner: Option<String>,
+    pub source: RegistrySource,
+    pub measured: bool,
+    /// `"builtin"`, `"api"` or `"path#index"` — named in warnings.
+    pub registered_from: String,
+}
+
+/// Resolve a task id: builtins first, overlay second, `None` for fully
+/// unknown ids (the legacy path).
+pub fn resolve_task(model_id: &str) -> Option<ResolvedTask> {
+    if let Some(spec) = lookup_task(model_id) {
+        return Some(ResolvedTask {
+            kind: spec.kind,
+            max_tokens: spec.max_tokens,
+            prompt_first: spec.prompt_first,
+            fp32: spec.fp32.into(),
+            fp16: spec.fp16.map(ResolvedArtifact::from),
+            int8: spec.int8.map(ResolvedArtifact::from),
+            q8: spec.q8.map(ResolvedArtifact::from),
+            extra_files: kind_extra_files(spec.kind).iter().map(|s| s.to_string()).collect(),
+            source: RegistrySource::Builtin,
+            measured: true,
+            registered_from: "builtin".to_string(),
+        });
+    }
+    TASK_OVERLAY
+        .read()
+        .ok()
+        .and_then(|o| o.get(model_id).cloned())
+        .map(|e| ResolvedTask {
+            kind: e.kind,
+            max_tokens: e.max_tokens,
+            prompt_first: e.prompt_first,
+            fp32: ResolvedArtifact::from(&e.fp32),
+            fp16: e.fp16.as_ref().map(ResolvedArtifact::from),
+            int8: e.int8.as_ref().map(ResolvedArtifact::from),
+            q8: e.q8.as_ref().map(ResolvedArtifact::from),
+            // Kind defaults always apply — the entry may only extend.
+            extra_files: {
+                let mut files: Vec<String> =
+                    kind_extra_files(e.kind).iter().map(|s| s.to_string()).collect();
+                for f in e.extra_files {
+                    if !files.contains(&f) {
+                        files.push(f);
+                    }
+                }
+                files
+            },
+            source: RegistrySource::Registered,
+            measured: e.provenance.measured,
+            registered_from: e.registered_from.clone(),
+        })
+}
+
+/// Resolve an embed id: builtins first, overlay second, `None` for
+/// fully unknown ids.
+pub fn resolve_model(model_id: &str) -> Option<ResolvedModel> {
+    if let Some(spec) = lookup_model(model_id) {
+        return Some(ResolvedModel {
+            native_dim: spec.native_dim,
+            max_tokens: spec.max_tokens,
+            ladder: spec.ladder.to_vec(),
+            fp32: spec.fp32.into(),
+            fp16: spec.fp16.map(ResolvedArtifact::from),
+            int8: spec.int8.map(ResolvedArtifact::from),
+            text_partner: spec.text_partner.map(str::to_string),
+            source: RegistrySource::Builtin,
+            measured: true,
+            registered_from: "builtin".to_string(),
+        });
+    }
+    MODEL_OVERLAY
+        .read()
+        .ok()
+        .and_then(|o| o.get(model_id).cloned())
+        .map(|e| ResolvedModel {
+            native_dim: e.native_dim,
+            max_tokens: e.max_tokens,
+            ladder: e.ladder.clone(),
+            fp32: ResolvedArtifact::from(&e.fp32),
+            fp16: e.fp16.as_ref().map(ResolvedArtifact::from),
+            int8: e.int8.as_ref().map(ResolvedArtifact::from),
+            text_partner: e.text_partner.clone(),
+            source: RegistrySource::Registered,
+            measured: e.provenance.measured,
+            registered_from: e.registered_from.clone(),
+        })
+}
+
+/// Registry file envelope: `{"registry_version": 1, "tasks": [...],
+/// "models": [...]}`. The version is required — v2 files fail loudly
+/// instead of mis-parsing. Entries validate through the identical
+/// `validate_*` as API registration.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryFile {
+    registry_version: u32,
+    #[serde(default)]
+    tasks: Vec<RegisteredTask>,
+    #[serde(default)]
+    models: Vec<RegisteredModel>,
+}
+
+/// What one `load_registry_file` call added.
+#[derive(Clone, Debug, Serialize)]
+pub struct RegistrySummary {
+    pub path: String,
+    pub tasks_registered: usize,
+    pub models_registered: usize,
+}
+
+/// Load a registry file into the overlay: parse (serde, strict),
+/// check the version, validate + register each entry with
+/// `registered_from` stamped `"path#index"`. No auto-discovery, no
+/// cwd sniffing — the caller names the file (or sets
+/// `EMBROIDER_REGISTRY_FILE`). Entries are data: a bad file fails
+/// here, before any download.
+pub fn load_registry_file(path: &Path) -> Result<RegistrySummary> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| anyhow!("registry file '{}' unreadable: {e}", path.display()))?;
+    let file: RegistryFile = serde_json::from_str(&text)
+        .map_err(|e| anyhow!("registry file '{}' parses: {e}", path.display()))?;
+    if file.registry_version != 1 {
+        return Err(anyhow!(
+            "registry file '{}': registry_version {} unsupported (this embroider reads version 1) — \
+             refusing to mis-parse a newer schema",
+            path.display(), file.registry_version
+        ));
+    }
+    let mut tasks_registered = 0;
+    for (i, mut entry) in file.tasks.into_iter().enumerate() {
+        entry.registered_from = format!("{}#{i}", path.display());
+        register_task(entry)?;
+        tasks_registered += 1;
+    }
+    let mut models_registered = 0;
+    for (i, mut entry) in file.models.into_iter().enumerate() {
+        entry.registered_from = format!("{}#{i}", path.display());
+        register_model(entry)?;
+        models_registered += 1;
+    }
+    Ok(RegistrySummary {
+        path: path.display().to_string(),
+        tasks_registered,
+        models_registered,
+    })
+}
+
+/// Snapshot of the task overlay (sorted by id, for `available_models`
+/// and `export_registry`).
+pub fn registered_tasks() -> Vec<RegisteredTask> {
+    let mut tasks: Vec<RegisteredTask> = TASK_OVERLAY
+        .read()
+        .map(|o| o.values().cloned().collect())
+        .unwrap_or_default();
+    tasks.sort_by(|a, b| a.id.cmp(&b.id));
+    tasks
+}
+
+/// Snapshot of the embed overlay (sorted by id).
+pub fn registered_models() -> Vec<RegisteredModel> {
+    let mut models: Vec<RegisteredModel> = MODEL_OVERLAY
+        .read()
+        .map(|o| o.values().cloned().collect())
+        .unwrap_or_default();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models
+}
+
+/// Export the overlay (registered entries only — builtins cannot be
+/// re-registered, so a merged export would not round-trip) as a
+/// versioned registry file. Deterministic: entries sorted by id.
+pub fn export_registry() -> Result<String> {
+    let tasks = registered_tasks();
+    let models = registered_models();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "registry_version": 1,
+        "tasks": tasks,
+        "models": models,
+    }))
+    .map_err(|e| anyhow!("registry export serializes: {e}"))
+}
+
 /// Select the acquisition artifact for a (task model, precision) request.
 /// `Auto` must already be resolved via `Precision::resolve` before
 /// calling (auto never yields `Int8`/`Q8`). Unlisted pairs fall back to
 /// the spec fp32 artifact; unknown ids fall back to the legacy layout.
-pub fn artifact_for_task<'a>(model_id: &'a str, precision: Precision) -> Artifact<'a> {
-    match lookup_task(model_id) {
+pub fn artifact_for_task(model_id: &str, precision: Precision) -> ResolvedArtifact {
+    match resolve_task(model_id) {
         Some(spec) => match precision {
             Precision::Fp16 => spec.fp16.unwrap_or(spec.fp32),
             Precision::Int8 => spec.int8.unwrap_or(spec.fp32),
             Precision::Q8 => spec.q8.unwrap_or(spec.fp32),
             _ => spec.fp32,
         },
-        None => Artifact { repo: model_id, file: "onnx/model.onnx", sidecar: None },
+        None => ResolvedArtifact {
+            repo: model_id.to_string(),
+            file: "onnx/model.onnx".to_string(),
+            sidecar: None,
+            revision: None,
+        },
     }
 }
 
@@ -457,14 +1103,19 @@ pub fn artifact_for_task<'a>(model_id: &'a str, precision: Precision) -> Artifac
 /// `Auto` must already be resolved via `Precision::resolve` before
 /// calling (auto never yields `Int8`). Unlisted pairs fall back to the
 /// spec fp32 artifact; unknown ids fall back to the legacy layout.
-pub fn artifact_for<'a>(model_id: &'a str, precision: Precision) -> Artifact<'a> {
-    match lookup_model(model_id) {
+pub fn artifact_for(model_id: &str, precision: Precision) -> ResolvedArtifact {
+    match resolve_model(model_id) {
         Some(spec) => match precision {
             Precision::Fp16 => spec.fp16.unwrap_or(spec.fp32),
             Precision::Int8 => spec.int8.unwrap_or(spec.fp32),
             _ => spec.fp32,
         },
-        None => Artifact { repo: model_id, file: "onnx/model.onnx", sidecar: None },
+        None => ResolvedArtifact {
+            repo: model_id.to_string(),
+            file: "onnx/model.onnx".to_string(),
+            sidecar: None,
+            revision: None,
+        },
     }
 }
 
@@ -647,34 +1298,43 @@ pub fn cache_info(
              pass an explicit precision ('fp32', 'fp16' or 'int8')"
         ));
     }
-    let artifact = match lookup_task(model_id) {
-        Some(_) => artifact_for_task(model_id, precision),
-        None => artifact_for(model_id, precision),
+    let resolved = resolve_task(model_id);
+    // Task ids resolve through the task tiers (rerank/decide/laya/2b);
+    // everything else is an embed id or a legacy repo path.
+    let artifact = if resolved.is_some() {
+        artifact_for_task(model_id, precision)
+    } else {
+        artifact_for(model_id, precision)
     };
-    if lookup_model(model_id).is_none() && lookup_task(model_id).is_none() {
-        parse_owner_name(artifact.repo)?;
+    // Caller revision wins; otherwise the tier pin (builtins and
+    // registered tiers alike); floating latest only when nothing pins.
+    let rev = revision.map(str::to_string).or(artifact.revision.clone());
+    if resolve_model(model_id).is_none() && resolved.is_none() {
+        parse_owner_name(&artifact.repo)?;
     }
 
     let sidecar = artifact.sidecar();
-    let mut files: Vec<(&str, bool)> = Vec::with_capacity(4);
-    files.push((artifact.file, true));
-    if let Some(sc) = sidecar.as_deref() {
+    let mut files: Vec<(String, bool)> = Vec::with_capacity(6);
+    files.push((artifact.file.clone(), true));
+    if let Some(sc) = sidecar {
         files.push((sc, false));
     }
-    files.push(("tokenizer.json", true));
-    // Marker-layout checkpoints carry their ceilings + calibration in
-    // the config; LayaDecider refuses to open without it.
-    if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::DecideLaya) {
-        files.push(("rl_agent_config.json", true));
+    files.push(("tokenizer.json".to_string(), true));
+    // Kind contract files ride the resolved extra_files (kind defaults
+    // for builtins, validated extension for registered entries). The
+    // slot-layout weights file follows the sidecar rule instead: open()
+    // requires it for q8, warns-and-continues otherwise — so cache_info
+    // requires it for q8 only (precision-aware, same as the artifact).
+    if let Some(spec) = resolved.as_ref() {
+        for f in &spec.extra_files {
+            if matches!(spec.kind, TaskKind::DecideLaya | TaskKind::Decide2B) {
+                let required = !f.ends_with(".safetensors") || precision == Precision::Q8;
+                files.push((f.clone(), required));
+            }
+        }
     }
-    // Slot-layout checkpoint: the slot rows, label alphabet and
-    // per-qtype temperatures live in decision.json + calibration.json;
-    // Decider2B refuses to open without them.
-    if lookup_task(model_id).map(|s| s.kind) == Some(TaskKind::Decide2B) {
-        files.push(("decision.json", true));
-        files.push(("calibration.json", true));
-    }
-    let mut rep = cache_info_files(artifact.repo, &files, revision, cache_dir)?;
+    let refs: Vec<(&str, bool)> = files.iter().map(|(f, r)| (f.as_str(), *r)).collect();
+    let mut rep = cache_info_files(&artifact.repo, &refs, rev.as_deref(), cache_dir)?;
     // The generic core echoes the repo; the registry surface reports the
     // id as passed plus its resolved tier.
     rep.model_id = model_id.to_string();
@@ -791,9 +1451,9 @@ mod tests {
 
     #[test]
     fn artifact_sidecar_derives_from_stem() {
-        let a = Artifact { repo: "x/y", file: "onnx/model_fp16.onnx", sidecar: None };
+        let a = Artifact { repo: "x/y", file: "onnx/model_fp16.onnx", sidecar: None, revision: None };
         assert_eq!(a.sidecar().as_deref(), Some("onnx/model_fp16.onnx_data"));
-        let b = Artifact { repo: "x/y", file: "model.bin", sidecar: None };
+        let b = Artifact { repo: "x/y", file: "model.bin", sidecar: None, revision: None };
         assert_eq!(b.sidecar(), None);
     }
 
@@ -803,6 +1463,7 @@ mod tests {
             repo: VISION_NANO_REPO,
             file: "fp32/model.onnx",
             sidecar: Some("fp32/model.onnx.data"),
+            revision: Some("95c7be07d81ded60cd105727ed9ba2d04003692d"),
         };
         assert_eq!(a.sidecar().as_deref(), Some("fp32/model.onnx.data"));
     }
@@ -816,13 +1477,13 @@ mod tests {
         assert!(TEXT_SMALL.text_partner.is_none());
         assert!(TEXT_NANO.text_partner.is_none());
         let fp32 = artifact_for(VISION_NANO_MODEL, Precision::Fp32);
-        assert_eq!((fp32.repo, fp32.file), (VISION_NANO_REPO, "fp32/model.onnx"));
+        assert_eq!((fp32.repo.as_str(), fp32.file.as_str()), (VISION_NANO_REPO, "fp32/model.onnx"));
         assert_eq!(fp32.sidecar().as_deref(), Some("fp32/model.onnx.data"));
         let fp16 = artifact_for(VISION_NANO_MODEL, Precision::Fp16);
-        assert_eq!((fp16.repo, fp16.file), (VISION_NANO_REPO, "fp16/model.onnx"));
+        assert_eq!((fp16.repo.as_str(), fp16.file.as_str()), (VISION_NANO_REPO, "fp16/model.onnx"));
         // Unlisted pair (vision has no int8) falls back to fp32.
         let int8 = artifact_for(VISION_NANO_MODEL, Precision::Int8);
-        assert_eq!((int8.repo, int8.file), (VISION_NANO_REPO, "fp32/model.onnx"));
+        assert_eq!((int8.repo.as_str(), int8.file.as_str()), (VISION_NANO_REPO, "fp32/model.onnx"));
     }
 
     #[test]
@@ -832,19 +1493,19 @@ mod tests {
         assert_eq!(spec.max_tokens, 8192);
         assert_eq!(spec.ladder, &[32, 64, 128, 256, 512, 768]);
         let fp16 = artifact_for(NANO_TEXT_MODEL, Precision::Fp16);
-        assert_eq!((fp16.repo, fp16.file), (NANO_TEXT_MODEL, "onnx/model_fp16.onnx"));
+        assert_eq!((fp16.repo.as_str(), fp16.file.as_str()), (NANO_TEXT_MODEL, "onnx/model_fp16.onnx"));
         let int8 = artifact_for(NANO_TEXT_MODEL, Precision::Int8);
-        assert_eq!((int8.repo, int8.file), (NANO_TEXT_MODEL, "onnx/model_quantized.onnx"));
+        assert_eq!((int8.repo.as_str(), int8.file.as_str()), (NANO_TEXT_MODEL, "onnx/model_quantized.onnx"));
         // Unlisted pair (small has no int8) falls back to fp32, never to junk.
         let small_int8 = artifact_for(FP32_TEXT_MODEL, Precision::Int8);
-        assert_eq!((small_int8.repo, small_int8.file), (FP32_TEXT_MODEL, "onnx/model.onnx"));
+        assert_eq!((small_int8.repo.as_str(), small_int8.file.as_str()), (FP32_TEXT_MODEL, "onnx/model.onnx"));
     }
 
     #[test]
     fn registry_unknown_id_takes_legacy_layout() {
         assert!(lookup_model("someone/custom-embed").is_none());
         let a = artifact_for("someone/custom-embed", Precision::Fp16);
-        assert_eq!((a.repo, a.file), ("someone/custom-embed", "onnx/model.onnx"));
+        assert_eq!((a.repo.as_str(), a.file.as_str()), ("someone/custom-embed", "onnx/model.onnx"));
     }
 
     #[test]
@@ -858,16 +1519,16 @@ mod tests {
         assert_eq!(mm.kind, TaskKind::Rerank);
         assert_eq!(mm.max_tokens, 512);
         let fp32 = artifact_for_task(RERANK_MINILM_MODEL, Precision::Fp32);
-        assert_eq!((fp32.repo, fp32.file), (RERANK_MINILM_MODEL, "onnx/model.onnx"));
+        assert_eq!((fp32.repo.as_str(), fp32.file.as_str()), (RERANK_MINILM_MODEL, "onnx/model.onnx"));
         // Unlisted pairs fall back to fp32, never to junk.
         for p in [Precision::Fp16, Precision::Int8, Precision::Auto] {
             let a = artifact_for_task(RERANK_MMARCO_MODEL, p);
-            assert_eq!((a.repo, a.file), (RERANK_MMARCO_MODEL, "onnx/model.onnx"));
+            assert_eq!((a.repo.as_str(), a.file.as_str()), (RERANK_MMARCO_MODEL, "onnx/model.onnx"));
         }
         // Unknown ids take the legacy layout.
         assert!(lookup_task("someone/custom-embed").is_none());
         let a = artifact_for_task("someone/custom-rerank", Precision::Fp16);
-        assert_eq!((a.repo, a.file), ("someone/custom-rerank", "onnx/model.onnx"));
+        assert_eq!((a.repo.as_str(), a.file.as_str()), ("someone/custom-rerank", "onnx/model.onnx"));
         // The registries don't leak into each other.
         assert!(lookup_model(RERANK_MINILM_MODEL).is_none());
         assert!(lookup_task(FP32_TEXT_MODEL).is_none());
@@ -876,7 +1537,7 @@ mod tests {
         assert_eq!(gli.max_tokens, 512);
         assert!(gli.fp16.is_none() && gli.int8.is_none());
         let fp32 = artifact_for_task(GLICLASS_SMALL_MODEL, Precision::Fp32);
-        assert_eq!((fp32.repo, fp32.file), (GLICLASS_SMALL_MODEL, "onnx/model.onnx"));
+        assert_eq!((fp32.repo.as_str(), fp32.file.as_str()), (GLICLASS_SMALL_MODEL, "onnx/model.onnx"));
         assert_eq!(TaskKind::Rerank.as_str(), "rerank");
         assert_eq!(TaskKind::Decide.as_str(), "decide");
     }
@@ -971,7 +1632,7 @@ mod tests {
         std::fs::write(snap.join("onnx/model.onnx"), &model_bytes).unwrap();
         std::fs::write(snap.join("tokenizer.json"), &tok_bytes).unwrap();
 
-        let rep = cache_info(NANO_TEXT_MODEL, None, Some(root.clone()), Precision::Fp32).unwrap();
+        let rep = cache_info(NANO_TEXT_MODEL, Some(sha), Some(root.clone()), Precision::Fp32).unwrap();
         assert!(rep.cached, "{rep:?}");
         assert_eq!(
             rep.files.get("onnx/model.onnx").unwrap().as_deref(),
@@ -985,7 +1646,7 @@ mod tests {
 
         // ---- partial miss: tokenizer gone → open() would fail offline ----
         std::fs::remove_file(snap.join("tokenizer.json")).unwrap();
-        let rep = cache_info(NANO_TEXT_MODEL, None, Some(root.clone()), Precision::Fp32).unwrap();
+        let rep = cache_info(NANO_TEXT_MODEL, Some(sha), Some(root.clone()), Precision::Fp32).unwrap();
         assert!(!rep.cached);
         assert!(rep.files.get("onnx/model.onnx").unwrap().is_some());
         assert!(rep.files.get("tokenizer.json").unwrap().is_none());
@@ -1002,7 +1663,7 @@ mod tests {
         // ---- full miss: fresh cache dir, raises nothing, everything None ----
         let fresh = root.join("fresh");
         std::fs::create_dir_all(&fresh).unwrap();
-        let rep = cache_info(NANO_TEXT_MODEL, None, Some(fresh), Precision::Fp32).unwrap();
+        let rep = cache_info(NANO_TEXT_MODEL, Some(sha), Some(fresh), Precision::Fp32).unwrap();
         assert!(!rep.cached);
         assert!(rep.files.values().all(|p| p.is_none()));
         assert!(rep.snapshot_path.is_none());
@@ -1142,8 +1803,16 @@ mod tests {
             "models--jinaai--jina-embeddings-v5-text-nano-retrieval",
             &[("onnx/model.onnx", &[9u8; 64]), ("tokenizer.json", &[7u8; 8])],
         );
-        let via_registry =
-            cache_info(NANO_TEXT_MODEL, None, Some(root.clone()), Precision::Fp32).unwrap();
+        // The fake repo pins refs/main at the fixture sha: pass it
+        // explicitly (None now means the spec pin, which the fake cache
+        // lacks — that default is covered by the pin structural test).
+        let via_registry = cache_info(
+            NANO_TEXT_MODEL,
+            Some("abcdef0123456789abcdef0123456789abcdef01"),
+            Some(root.clone()),
+            Precision::Fp32,
+        )
+        .unwrap();
         let via_generic = cache_info_files(
             NANO_TEXT_MODEL,
             &[
@@ -1167,4 +1836,244 @@ mod tests {
         assert_eq!(via_registry.snapshot_path.as_deref(), Some(snap.as_path()));
         let _ = std::fs::remove_dir_all(&root);
     }
+    fn test_task_entry(repo: &str) -> RegisteredTask {
+        RegisteredTask {
+            id: "test-org/test-reranker".to_string(),
+            kind: TaskKind::Rerank,
+            max_tokens: 256,
+            prompt_first: false,
+            fp32: RegisteredArtifact {
+                repo: repo.to_string(),
+                file: "onnx/model.onnx".to_string(),
+                sidecar: None,
+                revision: None,
+            },
+            fp16: None,
+            int8: None,
+            q8: None,
+            provenance: Provenance::unclaimed(),
+            registered_from: String::new(),
+            extra_files: vec![],
+        }
+    }
+
+    #[test]
+    fn task_kind_parse_accepts_aliases() {
+        assert_eq!(TaskKind::parse("rerank").unwrap(), TaskKind::Rerank);
+        assert_eq!(TaskKind::parse("DECIDE").unwrap(), TaskKind::Decide);
+        assert_eq!(TaskKind::parse("decide-laya").unwrap(), TaskKind::DecideLaya);
+        assert_eq!(TaskKind::parse("laya").unwrap(), TaskKind::DecideLaya);
+        assert_eq!(TaskKind::parse("decide-2b").unwrap(), TaskKind::Decide2B);
+        assert_eq!(TaskKind::parse("decider2b").unwrap(), TaskKind::Decide2B);
+        assert!(TaskKind::parse("embed").is_err());
+        assert!(TaskKind::parse("cross-encoder").is_err());
+    }
+
+    #[test]
+    fn register_task_round_trip_resolves_and_serves() {
+        let id = "test-org/test-reranker";
+        unregister_task(id);
+        let entry = test_task_entry("test-org/test-reranker-onnx");
+        let back = register_task(entry).expect("register");
+        assert_eq!(back.registered_from, "api");
+        let spec = resolve_task(id).expect("resolves");
+        assert_eq!(spec.kind, TaskKind::Rerank);
+        assert_eq!(spec.max_tokens, 256);
+        assert_eq!(spec.source, RegistrySource::Registered);
+        assert!(!spec.measured);
+        assert_eq!(spec.registered_from, "api");
+        // Unlisted tiers fall back to fp32 (the same rule as builtins).
+        assert_eq!(artifact_for_task(id, Precision::Q8).file, "onnx/model.onnx");
+        assert_eq!(
+            artifact_for_task(id, Precision::Fp32).repo,
+            "test-org/test-reranker-onnx"
+        );
+        // Duplicate refused; builtin shadow refused.
+        assert!(register_task(test_task_entry("test-org/test-reranker-onnx")).is_err());
+        let mut shadow = test_task_entry("x/y");
+        shadow.id = RERANK_MINILM_MODEL.to_string();
+        assert!(register_task(shadow).is_err());
+        assert!(unregister_task(id));
+        assert!(resolve_task(id).is_none());
+        // Legacy path untouched: unknown ids still resolve None.
+        assert!(resolve_task("someone/else").is_none());
+    }
+
+    #[test]
+    fn register_task_validation_is_loud_before_io() {
+        // Bad id shape.
+        let mut e = test_task_entry("test-org/x-onnx");
+        e.id = "not-an-owner-name".to_string();
+        assert!(register_task(e).is_err());
+        // Over the kind ceiling (rerank caps at 512).
+        let mut e = test_task_entry("test-org/x-onnx");
+        e.id = "test-org/too-long".to_string();
+        e.max_tokens = 1024;
+        assert!(register_task(e).is_err());
+        // Non-onnx graph file.
+        let mut e = test_task_entry("test-org/x-onnx");
+        e.id = "test-org/bad-file".to_string();
+        e.fp32.file = "model.safetensors".to_string();
+        assert!(register_task(e).is_err());
+        // Laya kind without its config file.
+        let mut e = test_task_entry("test-org/x-onnx");
+        e.id = "test-org/bare-laya".to_string();
+        e.kind = TaskKind::DecideLaya;
+        e.max_tokens = 512;
+        assert!(register_task(e).is_err());
+        // Decide-2b kind without the weights file.
+        let mut e = test_task_entry("test-org/x-onnx");
+        e.id = "test-org/bare-2b".to_string();
+        e.kind = TaskKind::Decide2B;
+        e.max_tokens = 512;
+        e.extra_files = vec!["decision.json".to_string(), "calibration.json".to_string()];
+        assert!(register_task(e).is_err());
+        // prompt_first on a marker layout warns but registers.
+        let mut e = test_task_entry("test-org/x-onnx");
+        e.id = "test-org/warned-laya".to_string();
+        e.kind = TaskKind::DecideLaya;
+        e.max_tokens = 512;
+        e.prompt_first = true;
+        e.extra_files = vec!["rl_agent_config.json".to_string()];
+        assert!(register_task(e).is_ok());
+        assert!(unregister_task("test-org/warned-laya"));
+    }
+
+    #[test]
+    fn register_model_validation_and_resolution() {
+        let id = "test-org/test-embed";
+        unregister_model(id);
+        let entry = RegisteredModel {
+            id: id.to_string(),
+            native_dim: 768,
+            max_tokens: 8192,
+            ladder: vec![32, 128, 768],
+            fp32: RegisteredArtifact {
+                repo: "test-org/test-embed-onnx".to_string(),
+                file: "onnx/model.onnx".to_string(),
+                sidecar: None,
+                revision: None,
+            },
+            fp16: None,
+            int8: None,
+            text_partner: None,
+            provenance: Provenance::unclaimed(),
+            registered_from: String::new(),
+        };
+        register_model(entry).expect("register");
+        let spec = resolve_model(id).expect("resolves");
+        assert_eq!(spec.native_dim, 768);
+        assert_eq!(spec.ladder, vec![32, 128, 768]);
+        assert_eq!(spec.source, RegistrySource::Registered);
+        assert!(unregister_model(id));
+        // Bad ladders refused: empty, unsorted, over native_dim.
+        for bad in [vec![], vec![128, 32], vec![32, 1024]] {
+            let mut e = RegisteredModel {
+                id: "test-org/bad-ladder".to_string(),
+                native_dim: 768,
+                max_tokens: 512,
+                ladder: bad,
+                fp32: RegisteredArtifact {
+                    repo: "test-org/x".to_string(),
+                    file: "onnx/model.onnx".to_string(),
+                    sidecar: None,
+                    revision: None,
+                },
+                fp16: None,
+                int8: None,
+                text_partner: None,
+                provenance: Provenance::unclaimed(),
+                registered_from: String::new(),
+            };
+            let _ = &mut e;
+            assert!(validate_model(&e).is_err());
+        }
+        // Builtin shadow refused.
+        let mut e = RegisteredModel {
+            id: NANO_TEXT_MODEL.to_string(),
+            native_dim: 768,
+            max_tokens: 8192,
+            ladder: vec![768],
+            fp32: RegisteredArtifact {
+                repo: "test-org/x".to_string(),
+                file: "onnx/model.onnx".to_string(),
+                sidecar: None,
+                revision: None,
+            },
+            fp16: None,
+            int8: None,
+            text_partner: None,
+            provenance: Provenance::unclaimed(),
+            registered_from: String::new(),
+        };
+        let _ = &mut e;
+        assert!(register_model(e).is_err());
+    }
+
+    #[test]
+    fn registry_file_round_trip() {
+        // Strict schema: unknown fields and versions fail loudly.
+        assert!(serde_json::from_str::<RegistryFile>("{\"registry_version\": 1}").is_ok());
+        assert!(serde_json::from_str::<RegistryFile>(
+            "{\"registry_version\": 2, \"tasks\": [], \"models\": []}"
+        )
+        .is_ok()); // parses; the version gate lives in load_registry_file
+        assert!(serde_json::from_str::<RegistryFile>(
+            "{\"registry_version\": 1, \"tasks\": [], \"oops\": []}"
+        )
+        .is_err());
+        let dir = std::env::temp_dir().join("embroider-registry-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("extra.json");
+        std::fs::write(
+            &path,
+            r#"{"registry_version": 1,
+                "tasks": [{"id": "test-org/file-reranker", "kind": "rerank", "max_tokens": 128,
+                           "fp32": {"repo": "test-org/file-reranker-onnx", "file": "onnx/model.onnx"}}],
+                "models": []}"#,
+        )
+        .unwrap();
+        unregister_task("test-org/file-reranker");
+        let summary = load_registry_file(&path).expect("load");
+        assert_eq!(summary.tasks_registered, 1);
+        assert_eq!(summary.models_registered, 0);
+        let spec = resolve_task("test-org/file-reranker").expect("resolves");
+        assert_eq!(spec.registered_from, format!("{}#0", path.display()));
+        // Export round-trips through the loader (overlay only).
+        let exported = export_registry().expect("export");
+        unregister_task("test-org/file-reranker");
+        let summary = load_registry_file(&path).expect("reload");
+        assert_eq!(summary.tasks_registered, 1);
+        assert!(exported.contains("test-org/file-reranker"));
+        assert!(unregister_task("test-org/file-reranker"));
+        std::fs::remove_file(&path).ok();
+        // Wrong version refused before any registration.
+        std::fs::write(&path, r#"{"registry_version": 2, "tasks": [], "models": []}"#).unwrap();
+        assert!(load_registry_file(&path).is_err());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn builtin_artifacts_carry_revision_pins() {
+        // Structural: fetching defaults to the parity-gated pin, never
+        // floating latest (decision #4 — pins transcribed from comments).
+        for m in builtin_models() {
+            assert!(m.fp32.revision.is_some(), "{} fp32 unpinned", m.id);
+            for (tier, art) in [("fp16", m.fp16), ("int8", m.int8)].into_iter().filter_map(|(t, a)| a.map(|a| (t, a))) {
+                assert!(art.revision.is_some(), "{} {tier} unpinned", m.id);
+            }
+        }
+        for t in builtin_tasks() {
+            assert!(t.fp32.revision.is_some(), "{} fp32 unpinned", t.id);
+            for (tier, art) in
+                [("fp16", t.fp16), ("int8", t.int8), ("q8", t.q8)].into_iter().filter_map(|(t, a)| {
+                    a.map(|a| (t, a))
+                })
+            {
+                assert!(art.revision.is_some(), "{} {tier} unpinned", t.id);
+            }
+        }
+    }
+
 }
+

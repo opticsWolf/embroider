@@ -672,6 +672,7 @@ dependencies = [
  "ndarray",
  "ort",
  "pyo3",
+ "serde",
  "serde_json",
  "tokenizers",
 ]

@@ -16,7 +16,8 @@
 //! per-batch longest padding.
 
 use crate::acquire::{
-    artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name,
+    artifact_for_task, fetch_tokenizer_file, hf_client, lookup_task, parse_owner_name, resolve_task,
+    warn_if_unmeasured_task,
 };
 use crate::error::{oe, Result};
 use crate::jina::{build_session, count_tokens_in, load_tokenizer};
@@ -142,7 +143,7 @@ impl Reranker {
         // Per-model contract: registered ids validate against their own
         // ceiling; unknown ids fall back to the cross-encoder standard.
         let ceiling =
-            lookup_task(model_id).map(|s| s.max_tokens).unwrap_or(RERANK_DEFAULT_MAX);
+            resolve_task(model_id).map(|s| s.max_tokens).unwrap_or(RERANK_DEFAULT_MAX);
         let max_length = check_pair_limit_for(max_length, ceiling)?;
 
         // Same device→precision ordering as JinaV5: precision follows the
@@ -159,23 +160,27 @@ impl Reranker {
         // Precision selects the acquisition artifact from the task registry.
         // Unknown ids take the legacy path (id = fp32 repo, default file).
         let artifact = artifact_for_task(model_id, precision);
+        if let Some(spec) = resolve_task(model_id) {
+            warn_if_unmeasured_task(&spec, model_id, precision);
+        }
 
         // ---- model acquisition (per-artifact file layout) ----
         // No sidecar probe: both spike artifacts are A0-verified
         // single-file exports (ORT loads them standalone); a future
         // external-data export fails loudly at session load instead.
-        let (owner, name) = parse_owner_name(artifact.repo)?;
+        // Caller revision wins; otherwise the tier pin.
+        let (owner, name) = parse_owner_name(&artifact.repo)?;
         let client = hf_client(cache_dir.clone())?;
         let repo = client.model(owner, name);
-        let rev = revision.map(str::to_string);
+        let rev = revision.map(str::to_string).or(artifact.revision.clone());
         let onnx_path = repo
             .download_file()
-            .filename(artifact.file.to_string())
-            .maybe_revision(rev)
+            .filename(artifact.file.clone())
+            .maybe_revision(rev.clone())
             .send()
             .map_err(|e| anyhow!("{} missing for '{}': {e}", artifact.file, artifact.repo))?;
         // ---- pair tokenizer (truncation + batch padding configured) ----
-        let tok_path = fetch_tokenizer_file(artifact.repo, revision, cache_dir)?;
+        let tok_path = fetch_tokenizer_file(&artifact.repo, rev.as_deref(), cache_dir)?;
         let tokenizer = load_pair_tokenizer(&tok_path, max_length)?;
         let plain = load_tokenizer(&tok_path, None)?;
 

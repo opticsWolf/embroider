@@ -37,7 +37,7 @@ use anyhow::{anyhow, Result};
 use ndarray::Array2;
 use tokenizers::Tokenizer;
 
-use crate::acquire::{artifact_for_task, fetch_repo_file, lookup_task, TaskKind, LAYA_ABSOLUTE_MAX};
+use crate::acquire::{artifact_for_task, fetch_repo_file, resolve_task, warn_if_unmeasured_task, TaskKind, LAYA_ABSOLUTE_MAX};
 use crate::error::oe;
 use crate::jina::{build_session, count_tokens_in, load_tokenizer, special_id};
 use crate::policy::{resolve_provider_names, DeviceReq, Precision, SessionPolicy};
@@ -775,10 +775,11 @@ impl LayaDecider {
         precision: Precision,
         cpu_arena: bool,
     ) -> Result<Self> {
-        let spec = lookup_task(model_id).ok_or_else(|| {
+        let spec = resolve_task(model_id).ok_or_else(|| {
             anyhow!(
                 "unknown Laya model '{model_id}'; registered checkpoints are convaiinnovations/laya-typed-decisions, \
-                 convaiinnovations/laya and convaiinnovations/laya-multilingual (explicit files via open_files)"
+                 convaiinnovations/laya and convaiinnovations/laya-multilingual — or register a new marker-layout \
+                 checkpoint (explicit files via open_files)"
             )
         })?;
         if spec.kind != TaskKind::DecideLaya {
@@ -802,19 +803,23 @@ impl LayaDecider {
         }
         let artifact = artifact_for_task(model_id, precision);
 
-        // ---- acquisition (artifact repo holds all four files) ----
+        // ---- acquisition (artifact repo holds graph + tokenizer + config) ----
+        // Caller revision wins; otherwise the tier pin.
+        let rev = revision.map(str::to_string).or(artifact.revision.clone());
+        let rev_ref = rev.as_deref();
         let onnx_path =
-            fetch_repo_file(artifact.repo, artifact.file, revision, cache_dir.clone())?;
+            fetch_repo_file(&artifact.repo, &artifact.file, rev_ref, cache_dir.clone())?;
+        warn_if_unmeasured_task(&spec, model_id, precision);
         if let Some(sidecar) = artifact.sidecar() {
-            match fetch_repo_file(artifact.repo, &sidecar, revision, cache_dir.clone()) {
+            match fetch_repo_file(&artifact.repo, &sidecar, rev_ref, cache_dir.clone()) {
                 Ok(_) => {}
                 Err(e) => eprintln!("embroider: no {sidecar} sidecar; assuming inline weights ({e})"),
             }
         }
         let tok_path =
-            fetch_repo_file(artifact.repo, "tokenizer.json", revision, cache_dir.clone())?;
+            fetch_repo_file(&artifact.repo, "tokenizer.json", rev_ref, cache_dir.clone())?;
         let cfg_path =
-            fetch_repo_file(artifact.repo, "rl_agent_config.json", revision, cache_dir)?;
+            fetch_repo_file(&artifact.repo, "rl_agent_config.json", rev_ref, cache_dir)?;
         Self::from_files(&onnx_path, &tok_path, &cfg_path, model_id, device, max_length, cpu_arena)
     }
 

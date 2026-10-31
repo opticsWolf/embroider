@@ -37,9 +37,13 @@ pub mod providers;
 
 pub use acquire::{
     artifact_for, artifact_for_task, builtin_models, builtin_tasks, cache_info, cache_info_files,
-    fetch_repo_file, fetch_tokenizer_file, lookup_model, lookup_task, parse_owner_name,
-    repo_for_precision,
-    Artifact, CacheReport, ModelSpec, TaskKind, TaskSpec, FP16_TEXT_MODEL, FP32_TEXT_MODEL,
+    export_registry, fetch_repo_file, fetch_tokenizer_file, load_registry_file, lookup_model,
+    lookup_task, parse_owner_name, register_model, register_task, registered_models,
+    registered_tasks, repo_for_precision, resolve_model, resolve_task, unregister_model,
+    unregister_task, validate_model, validate_task, warn_if_unmeasured_model,
+    warn_if_unmeasured_task, Artifact, CacheReport, ModelSpec, Provenance, RegisteredArtifact,
+    RegisteredModel, RegisteredTask, RegistrySource, RegistrySummary, ResolvedArtifact,
+    ResolvedModel, ResolvedTask, TaskKind, TaskSpec, FP16_TEXT_MODEL, FP32_TEXT_MODEL,
     GLICLASS_SMALL, GLICLASS_SMALL_MODEL, GLICLASS_V4_EDGE, GLICLASS_V4_EDGE_MODEL,
     LAYA_BASE, LAYA_BASE_MODEL, LAYA_MULTI, LAYA_MULTI_MODEL, LAYA_TD, LAYA_TD_MODEL,
     NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
@@ -1085,6 +1089,8 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
                 "text_partner".to_string(),
                 m.text_partner.unwrap_or("").to_string(),
             );
+            d.insert("source".to_string(), "builtin".to_string());
+            d.insert("measured".to_string(), "true".to_string());
             d
         })
         .collect();
@@ -1107,9 +1113,311 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
         }
         d.insert("precisions".to_string(), prec.join(","));
         d.insert("text_partner".to_string(), String::new());
+        d.insert("source".to_string(), "builtin".to_string());
+        d.insert("measured".to_string(), "true".to_string());
         d
     }));
+    // Overlay rows ride the same columns (vector-space keys empty on the
+    // task side, exactly like builtins); source/measured tell consumers
+    // what they're looking at without parsing ids.
+    for m in acquire::registered_models() {
+        let mut d = std::collections::HashMap::new();
+        d.insert("id".to_string(), m.id);
+        d.insert("kind".to_string(), "embed".to_string());
+        d.insert("native_dim".to_string(), String::new());
+        d.insert("max_tokens".to_string(), m.max_tokens.to_string());
+        d.insert(
+            "ladder".to_string(),
+            m.ladder.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(","),
+        );
+        d.insert(
+            "precisions".to_string(),
+            ["fp32"]
+                .into_iter()
+                .chain(m.fp16.as_ref().map(|_| "fp16"))
+                .chain(m.int8.as_ref().map(|_| "int8"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        d.insert("text_partner".to_string(), m.text_partner.unwrap_or_default());
+        d.insert("source".to_string(), "registered".to_string());
+        d.insert("measured".to_string(), m.provenance.measured.to_string());
+        out.push(d);
+    }
+    for t in acquire::registered_tasks() {
+        let mut d = std::collections::HashMap::new();
+        d.insert("id".to_string(), t.id);
+        d.insert("kind".to_string(), t.kind.as_str().to_string());
+        d.insert("native_dim".to_string(), String::new());
+        d.insert("max_tokens".to_string(), t.max_tokens.to_string());
+        d.insert("ladder".to_string(), String::new());
+        d.insert(
+            "precisions".to_string(),
+            ["fp32"]
+                .into_iter()
+                .chain(t.fp16.as_ref().map(|_| "fp16"))
+                .chain(t.int8.as_ref().map(|_| "int8"))
+                .chain(t.q8.as_ref().map(|_| "q8"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        d.insert("text_partner".to_string(), String::new());
+        d.insert("source".to_string(), "registered".to_string());
+        d.insert("measured".to_string(), t.provenance.measured.to_string());
+        out.push(d);
+    }
     out
+}
+
+/// Extract a required string field from a registry dict.
+#[cfg(feature = "extension-module")]
+fn reg_req_str(d: &pyo3::Bound<'_, pyo3::types::PyDict>, key: &str) -> PyResult<String> {
+    match d.get_item(key)? {
+        Some(v) if !v.is_none() => v.extract::<String>().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(format!("registry: '{key}' must be a string"))
+        }),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "registry: '{key}' is required"
+        ))),
+    }
+}
+
+/// Extract an optional string field (missing or None → None).
+#[cfg(feature = "extension-module")]
+fn reg_opt_str(d: &pyo3::Bound<'_, pyo3::types::PyDict>, key: &str) -> PyResult<Option<String>> {
+    match d.get_item(key)? {
+        Some(v) if !v.is_none() => v
+            .extract::<String>()
+            .map(Some)
+            .map_err(|_| {
+                pyo3::exceptions::PyValueError::new_err(format!("registry: '{key}' must be a string"))
+            }),
+        _ => Ok(None),
+    }
+}
+
+/// One artifact dict: `{"repo": ..., "file": ..., "sidecar"?: ...,
+/// "revision"?: ...}` — same schema as the registry file.
+#[cfg(feature = "extension-module")]
+fn artifact_from_py(v: &pyo3::Bound<pyo3::types::PyAny>) -> PyResult<acquire::RegisteredArtifact> {
+    let d = v.cast::<pyo3::types::PyDict>().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err("registry: artifact must be a dict")
+    })?;
+    Ok(acquire::RegisteredArtifact {
+        repo: reg_req_str(d, "repo")?,
+        file: reg_req_str(d, "file")?,
+        sidecar: reg_opt_str(d, "sidecar")?,
+        revision: reg_opt_str(d, "revision")?,
+    })
+}
+
+/// Provenance dict: `{"measured": bool, "worst_drift"?: float,
+/// "flips"?: int, "harness"?: str, "notes"?: str}`. Missing entirely →
+/// unclaimed (flagged-allow default).
+#[cfg(feature = "extension-module")]
+fn provenance_from_py(v: &pyo3::Bound<pyo3::types::PyAny>) -> PyResult<acquire::Provenance> {
+    let d = v.cast::<pyo3::types::PyDict>().map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err("registry: provenance must be a dict")
+    })?;
+    let measured = match d.get_item("measured")? {
+        Some(v) if !v.is_none() => v.extract::<bool>().map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err("registry: provenance 'measured' must be bool")
+        })?,
+        _ => false,
+    };
+    let num_opt = |key: &str| -> PyResult<Option<f64>> {
+        match d.get_item(key)? {
+            Some(v) if !v.is_none() => v
+                .extract::<f64>()
+                .map(Some)
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "registry: provenance '{key}' must be a number"
+                    ))
+                }),
+            _ => Ok(None),
+        }
+    };
+    let worst_drift = num_opt("worst_drift")?;
+    let flips = num_opt("flips")?.map(|f| f as u32);
+    Ok(acquire::Provenance {
+        measured,
+        worst_drift,
+        flips,
+        harness: reg_opt_str(d, "harness")?,
+        notes: reg_opt_str(d, "notes")?,
+    })
+}
+
+/// Register a task model under an existing kind (see
+/// `docs/model-registry-draft.md` layer 1): `kind` is one of
+/// 'rerank' / 'decide' / 'decide-laya' / 'decide-2b'; `fp32` is
+/// required, `fp16` / `int8` / `q8` are optional tiers;
+/// `extra_files` extends the kind defaults (never shrinks — e.g.
+/// 'decide-laya' always needs its config, 'decide-2b' its two configs
+/// plus a .safetensors weights file); `provenance` defaults to
+/// unmeasured. Returns the validated entry as a dict. Builtin ids and
+/// duplicates are refused loudly; `probe=True` runs an offline
+/// `cache_info` for the fp32 tier after registering and reports it.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "register_task")]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (id, kind, max_tokens, fp32, fp16=None, int8=None, q8=None, prompt_first=false, extra_files=None, provenance=None, probe=false))]
+fn register_task_py<'py>(
+    py: Python<'py>,
+    id: &str,
+    kind: &str,
+    max_tokens: usize,
+    fp32: pyo3::Bound<'py, pyo3::types::PyAny>,
+    fp16: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    int8: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    q8: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    prompt_first: bool,
+    extra_files: Option<Vec<String>>,
+    provenance: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    probe: bool,
+) -> PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    let kind = acquire::TaskKind::parse(kind)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let entry = acquire::RegisteredTask {
+        id: id.to_string(),
+        kind,
+        max_tokens,
+        prompt_first,
+        fp32: artifact_from_py(&fp32)?,
+        fp16: fp16.map(|a| artifact_from_py(&a)).transpose()?,
+        int8: int8.map(|a| artifact_from_py(&a)).transpose()?,
+        q8: q8.map(|a| artifact_from_py(&a)).transpose()?,
+        provenance: provenance.map(|p| provenance_from_py(&p)).transpose()?.unwrap_or_default(),
+        registered_from: "api".to_string(),
+        extra_files: extra_files.unwrap_or_default(),
+    };
+    let entry = acquire::register_task(entry)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let out = pyo3::types::PyDict::new(py);
+    out.set_item("id", &entry.id)?;
+    out.set_item("kind", entry.kind.as_str())?;
+    out.set_item("max_tokens", entry.max_tokens)?;
+    out.set_item("source", "registered")?;
+    out.set_item("measured", entry.provenance.measured)?;
+    out.set_item("registered_from", &entry.registered_from)?;
+    if probe {
+        // Offline by construction (cache_info never downloads); the
+        // entry stays registered regardless — the report tells the
+        // caller what open() would need.
+        match acquire::cache_info(&entry.id, None, None, crate::policy::Precision::Fp32) {
+            Ok(rep) => {
+                out.set_item("probe_cached", rep.cached)?;
+                out.set_item("probe_repo", rep.repo)?;
+            }
+            Err(e) => {
+                out.set_item("probe_cached", false)?;
+                out.set_item("probe_error", e.to_string())?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Register an embed model: `ladder` is the Matryoshka ladder
+/// (non-empty, ascending, within `native_dim`); `text_partner` names
+/// the text space image vectors compare into (vision-style, may be
+/// registered later). Returns the validated entry as a dict.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "register_model")]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (id, native_dim, max_tokens, ladder, fp32, fp16=None, int8=None, text_partner=None, provenance=None, probe=false))]
+fn register_model_py<'py>(
+    py: Python<'py>,
+    id: &str,
+    native_dim: usize,
+    max_tokens: usize,
+    ladder: Vec<usize>,
+    fp32: pyo3::Bound<'py, pyo3::types::PyAny>,
+    fp16: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    int8: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    text_partner: Option<String>,
+    provenance: Option<pyo3::Bound<'py, pyo3::types::PyAny>>,
+    probe: bool,
+) -> PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    let entry = acquire::RegisteredModel {
+        id: id.to_string(),
+        native_dim,
+        max_tokens,
+        ladder,
+        fp32: artifact_from_py(&fp32)?,
+        fp16: fp16.map(|a| artifact_from_py(&a)).transpose()?,
+        int8: int8.map(|a| artifact_from_py(&a)).transpose()?,
+        text_partner,
+        provenance: provenance.map(|p| provenance_from_py(&p)).transpose()?.unwrap_or_default(),
+        registered_from: "api".to_string(),
+    };
+    let entry = acquire::register_model(entry)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let out = pyo3::types::PyDict::new(py);
+    out.set_item("id", &entry.id)?;
+    out.set_item("kind", "embed")?;
+    out.set_item("max_tokens", entry.max_tokens)?;
+    out.set_item("source", "registered")?;
+    out.set_item("measured", entry.provenance.measured)?;
+    out.set_item("registered_from", &entry.registered_from)?;
+    if probe {
+        match acquire::cache_info(&entry.id, None, None, crate::policy::Precision::Fp32) {
+            Ok(rep) => {
+                out.set_item("probe_cached", rep.cached)?;
+                out.set_item("probe_repo", rep.repo)?;
+            }
+            Err(e) => {
+                out.set_item("probe_cached", false)?;
+                out.set_item("probe_error", e.to_string())?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Load a registry file into the overlay (`{"registry_version": 1,
+/// "tasks": [...], "models": [...]}` — strict schema, version-checked).
+/// Returns what the call added. No auto-discovery: the caller names the
+/// file.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "load_registry_file")]
+fn load_registry_file_py<'py>(
+    py: Python<'py>,
+    path: &str,
+) -> PyResult<pyo3::Bound<'py, pyo3::types::PyDict>> {
+    let summary = acquire::load_registry_file(std::path::Path::new(path))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let out = pyo3::types::PyDict::new(py);
+    out.set_item("path", summary.path)?;
+    out.set_item("tasks_registered", summary.tasks_registered)?;
+    out.set_item("models_registered", summary.models_registered)?;
+    Ok(out)
+}
+
+/// Export the overlay as a versioned registry file (registered entries
+/// only — builtins are not re-registerable, so a merged export would
+/// not round-trip). Deterministic: entries sorted by id.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "export_registry")]
+fn export_registry_py() -> PyResult<String> {
+    acquire::export_registry()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// Remove an overlay task entry (test/correction seam). Builtins are
+/// not removable. Returns whether anything was removed.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "unregister_task")]
+fn unregister_task_py(model_id: &str) -> bool {
+    acquire::unregister_task(model_id)
+}
+
+/// Remove an overlay embed entry (same test/correction seam).
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "unregister_model")]
+fn unregister_model_py(model_id: &str) -> bool {
+    acquire::unregister_model(model_id)
 }
 
 /// Shared dict rendering for [`acquire::CacheReport`]: identical keys for
@@ -1334,6 +1642,12 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDecider2B>()?;
     m.add_class::<PyJinaV5Vision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(register_task_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(register_model_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(load_registry_file_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(export_registry_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(unregister_task_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(unregister_model_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_files_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
