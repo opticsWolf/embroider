@@ -818,6 +818,10 @@ impl LayaDecider {
         }
         let tok_path =
             fetch_repo_file(&artifact.repo, "tokenizer.json", rev_ref, cache_dir.clone())?;
+        // Optional: names the special tokens (`laya_special_strings` reads it
+        // beside tokenizer.json). The multilingual checkpoint needs it for
+        // `<bos>`/`<eos>`/`<mask>`/`<pad>`; without it the BERT defaults apply.
+        let _ = fetch_repo_file(&artifact.repo, "tokenizer_config.json", rev_ref, cache_dir.clone());
         let cfg_path =
             fetch_repo_file(&artifact.repo, "rl_agent_config.json", rev_ref, cache_dir)?;
         Self::from_files(&onnx_path, &tok_path, &cfg_path, model_id, device, max_length, cpu_arena)

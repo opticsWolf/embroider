@@ -161,6 +161,19 @@ impl Reranker {
         // Unknown ids take the legacy path (id = fp32 repo, default file).
         let artifact = artifact_for_task(model_id, precision);
         if let Some(spec) = resolve_task(model_id) {
+            let missing = match precision {
+                Precision::Fp16 => spec.fp16.is_none(),
+                Precision::Int8 => spec.int8.is_none(),
+                Precision::Q8 => spec.q8.is_none(),
+                _ => false,
+            };
+            if missing {
+                eprintln!(
+                    "embroider: '{model_id}' ships no {} weights — precision '{}' falls back to the fp32 artifact",
+                    precision.as_str(),
+                    precision.as_str()
+                );
+            }
             warn_if_unmeasured_task(&spec, model_id, precision);
         }
 

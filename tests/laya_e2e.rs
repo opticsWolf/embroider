@@ -15,7 +15,7 @@
 //! the clamp rejection list names `choice:11+`; validation fires before
 //! any session work.
 
-use embroider::{DeviceReq, LayaDecider, LayaOption, LayaQuestion};
+use embroider::{DeviceReq, LayaDecider, LayaOption, LayaQuestion, Precision};
 use serde_json::Value;
 use std::path::Path;
 
@@ -405,4 +405,40 @@ fn laya_e2e_binning_map_remaps_mechanism() {
     assert!((after.answer_confidence - 0.85).abs() < 1e-6, "binned: {}", after.answer_confidence);
     assert!((before.answer_confidence - 0.9134).abs() < 1e-3, "raw: {}", before.answer_confidence);
     std::fs::remove_file(&dir).ok();
+}
+
+/// Registry `open` of the multilingual checkpoint: its tokenizer names the
+/// specials `<bos>`/`<eos>`/`<mask>`/`<pad>` in `tokenizer_config.json`,
+/// which `open` must fetch (it once didn't: "tokenizer lacks required
+/// special token '[CLS]'"). Set `LAYA_E2E_REGISTRY=1` (+ `ORT_DYLIB_PATH`);
+/// uses the HF cache, so set `HF_HUB_OFFLINE=1` to stay offline.
+#[test]
+#[ignore]
+fn laya_e2e_multilingual_opens_from_registry() {
+    if env("LAYA_E2E_REGISTRY").is_none() {
+        eprintln!("laya registry e2e skipped: set LAYA_E2E_REGISTRY=1");
+        return;
+    }
+    let d = LayaDecider::open(
+        "convaiinnovations/laya-multilingual",
+        None,
+        None,
+        DeviceReq::Cpu,
+        None,
+        Precision::Fp32,
+        false,
+    )
+    .expect("open multilingual from the registry");
+    let q = LayaQuestion::Noul {
+        instructions: "Does the passage answer the query: How do I reset a forgotten router password?"
+            .to_string(),
+        statement: "The passage answers the query.".to_string(),
+    };
+    let p_true = |state: &str| {
+        let dec = d.decide(state, std::slice::from_ref(&q)).expect("decide");
+        dec[0].probabilities.iter().find(|(o, _)| o == "true").expect("true").1
+    };
+    let pos = p_true("Hold the reset button for 10 seconds to restore factory settings, then set a new password.");
+    let neg = p_true("Preheat the oven to 200 degrees and fold the dough gently.");
+    assert!(pos > neg, "relevant passage ranks first: pos {pos} vs neg {neg}");
 }

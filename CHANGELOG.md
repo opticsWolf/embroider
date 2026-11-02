@@ -3,6 +3,20 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Fixed
+- `LayaDecider.open("convaiinnovations/laya-multilingual")` failed with
+  "tokenizer lacks required special token '[CLS]'": `open` never fetched
+  `tokenizer_config.json`, which names that checkpoint's specials
+  (`<bos>`/`<eos>`/`<mask>`/`<pad>`). It is now fetched when the repo has
+  one. New env-gated e2e `laya_e2e_multilingual_opens_from_registry`.
+
+### Changed
+- `Reranker.open` warns when the resolved precision has no artifact for
+  the model (e.g. `auto` → fp16 on CUDA for the cross-encoders) and the
+  fp32 weights are loaded instead.
+
 ## [0.12.0] — 2026-10-31
 
 ### Added
