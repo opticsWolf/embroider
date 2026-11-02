@@ -135,6 +135,11 @@ Rules:
   `open()` warns with attribution). All 22 builtin artifacts pinned
   to verified full SHAs; `open()` and `cache_info` default to the
   tier pin when the caller passes no revision.
+- **Laya registry open + rerank warning (0.12.1)**: `LayaDecider::open`
+  fetches `tokenizer_config.json` when the repo has one (the
+  multilingual checkpoint's `<bos>`/`<eos>`/`<mask>`/`<pad>` mapping
+  no longer needs an explicit files argument); `Reranker::open` warns
+  when the resolved precision has no artifact and fp32 loads instead.
 
 ## Model licences
 

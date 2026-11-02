@@ -3,7 +3,7 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [0.12.1] — 2026-11-02
 
 ### Fixed
 - `LayaDecider.open("convaiinnovations/laya-multilingual")` failed with
