@@ -48,6 +48,63 @@ pub(crate) fn task_prefixed<'a>(text: &'a str, task: &str) -> Cow<'a, str> {
     }
 }
 
+/// Pooling contract per model: Jina v5 reads the last attended token;
+/// EmbeddingGemma 2 mean-pools (per its `Pooling: Mean Pooling` spec +
+/// transformers.js `{ pooling: "mean", normalize: true }` usage).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Pooling {
+    LastToken,
+    Mean,
+}
+
+/// True for the EmbeddingGemma 2 registry id (mean pooling + Gemma prompts).
+pub(crate) fn is_gemma_model(model_id: &str) -> bool {
+    model_id == crate::acquire::EMBEDGEMMA2_MODEL
+}
+
+pub(crate) fn pooling_for(model_id: &str) -> Pooling {
+    if is_gemma_model(model_id) {
+        Pooling::Mean
+    } else {
+        Pooling::LastToken
+    }
+}
+
+/// Gemma task prompts (`config_sentence_transformers.json`): queries carry
+/// `task: search result | query: `, documents `title: none | text: `.
+/// Idempotent: texts already starting with `task:` / `title:` pass through
+/// (mirrors the Jina `task_prefixed` guard). `task` keeps the JinaV5
+/// `Query`/`Document` vocabulary for API compatibility.
+pub(crate) fn gemma_prefixed<'a>(text: &'a str, task: &str) -> Cow<'a, str> {
+    if text.starts_with("task:") || text.starts_with("title:") {
+        return Cow::Borrowed(text);
+    }
+    let t = task.to_ascii_lowercase();
+    if t == "query" || t == "retrieval-query" || t == "searchquery" || t == "question" {
+        Cow::Owned(format!("task: search result | query: {text}"))
+    } else {
+        Cow::Owned(format!("title: none | text: {text}"))
+    }
+}
+
+/// Mean pooling over attended positions: sum(hidden[0, ..mask_sum, :]) / mask_sum.
+/// `hidden` is the full [1, T, H] output; rows at/after `mask_sum` are padding
+/// and must not contribute (the Gemma contract: mean over real tokens only).
+pub(crate) fn mean_pool(hidden: &ndarray::Array3<f32>, mask_sum: usize) -> Array1<f32> {
+    let t = hidden.dim().1;
+    let h = hidden.dim().2;
+    let n = mask_sum.clamp(1, t.max(1));
+    let mut out = Array1::<f32>::zeros(h);
+    for i in 0..n {
+        for j in 0..h {
+            out[j] += hidden[[0, i, j]];
+        }
+    }
+    let denom = n as f32;
+    out.mapv_inplace(|x| x / denom);
+    out
+}
+
 /// L2-normalise at full width, truncate to ``dim``, re-normalise the
 /// truncated head (exact port of the ``_encode`` post-processing / Matryoshka
 /// protocol: normalise → truncate → re-normalise).
@@ -259,6 +316,7 @@ pub struct JinaV5 {
     precision: Precision,
     feed_token_type_ids: bool,
     output_name: String,
+    pooling: Pooling,
 }
 
 impl JinaV5 {
@@ -342,6 +400,18 @@ impl JinaV5 {
         let loaded =
             build_session(&onnx_path, device, &SessionPolicy::text_embed(), cpu_arena)?;
 
+        // EmbeddingGemma 2 ships a native pooled head (`sentence_embedding`,
+        // mean + projection + L2 inside the graph). Prefer it over the raw
+        // `last_hidden_state` when the graph declares it — the manual mean
+        // path stays as fallback for exports without the head.
+        let output_name = if is_gemma_model(model_id)
+            && loaded.session.outputs().iter().any(|o| o.name() == "sentence_embedding")
+        {
+            "sentence_embedding".to_string()
+        } else {
+            loaded.output_name
+        };
+
         Ok(Self {
             session: RwLock::new(loaded.session),
             tokenizer,
@@ -351,7 +421,8 @@ impl JinaV5 {
             used_cuda: loaded.used_cuda,
             precision,
             feed_token_type_ids: loaded.feed_token_type_ids,
-            output_name: loaded.output_name,
+            output_name,
+            pooling: pooling_for(model_id),
         })
     }
 
@@ -395,13 +466,21 @@ impl JinaV5 {
             precision: Precision::Fp32,
             feed_token_type_ids: loaded.feed_token_type_ids,
             output_name: loaded.output_name,
+            // Explicit files stay on the frozen Jina contract (files are
+            // what they are); EmbeddingGemma users should prefer the
+            // registry `open()` path, which selects mean pooling.
+            pooling: Pooling::LastToken,
         })
     }
 
     /// Exact port of `EmbeddingEngine._encode` (prefix → last-token → L2 →
-    /// truncate → re-normalise).
+    /// truncate → re-normalise). EmbeddingGemma 2 ids use the Gemma branch
+    /// instead (Gemma prompts → mean pooling → same L2 → truncate → re-norm).
     pub fn encode_one(&self, text: &str, task: &str) -> Result<Vec<f32>> {
-        let text = task_prefixed(text, task);
+        let text = match self.pooling {
+            Pooling::Mean => gemma_prefixed(text, task),
+            Pooling::LastToken => task_prefixed(text, task),
+        };
         let text: &str = &text;
 
         let enc = self
@@ -420,6 +499,34 @@ impl JinaV5 {
             .map_err(|e| anyhow!("input shape: {e}"))?;
         let mask_arr =
             Array2::from_shape_vec((1, t), mask).map_err(|e| anyhow!("mask shape: {e}"))?;
+
+        // Gemma multimodal graph: text-only callers feed empty modality
+        // features ([0, 512] float). The native `sentence_embedding` head
+        // (mean + projection + L2) is already normalized; truncate head
+        // below handles the MRL widths.
+        if self.pooling == Pooling::Mean {
+            let mut guard =
+                self.session.write().map_err(|_| anyhow!("session lock poisoned"))?;
+            let ids_t = oe(ort::value::TensorRef::from_array_view(&ids))?;
+            let mask_t = oe(ort::value::TensorRef::from_array_view(&mask_arr))?;
+            let empty = Array2::<f32>::zeros((0, 512));
+            let img_t = oe(ort::value::TensorRef::from_array_view(&empty))?;
+            let vid_t = oe(ort::value::TensorRef::from_array_view(&empty))?;
+            let aud_t = oe(ort::value::TensorRef::from_array_view(&empty))?;
+            let outputs = oe(guard.run(ort::inputs! {
+                "input_ids" => ids_t,
+                "attention_mask" => mask_t,
+                "image_features" => img_t,
+                "video_features" => vid_t,
+                "audio_features" => aud_t
+            }))?;
+            let pooled = oe(outputs[self.output_name.as_str()].try_extract_array::<f32>())?
+                .to_owned()
+                .into_dimensionality::<ndarray::Ix2>()
+                .map_err(|e| anyhow!("expected [B,H] embedding output: {e}"))?;
+            let row = pooled.row(0).to_owned();
+            return Ok(l2_truncate(&row, self.dim));
+        }
 
         let hidden = {
             let mut guard =
@@ -446,9 +553,16 @@ impl JinaV5 {
                 .map_err(|e| anyhow!("expected [B,T,H] output: {e}"))?
         };
 
-        // Last-token pooling: index of final real token, clamped ≥ 0.
-        let last_idx = (mask_sum as usize).saturating_sub(1);
-        let pooled = hidden.slice(ndarray::s![0, last_idx, ..]).to_owned();
+        // Pooling: Jina reads the last real token; EmbeddingGemma 2 means
+        // over attended positions (padding excluded). Both feed the same
+        // L2 → truncate → re-normalise Matryoshka head.
+        let pooled = match self.pooling {
+            Pooling::Mean => mean_pool(&hidden, mask_sum.max(0) as usize),
+            Pooling::LastToken => {
+                let last_idx = (mask_sum as usize).saturating_sub(1);
+                hidden.slice(ndarray::s![0, last_idx, ..]).to_owned()
+            }
+        };
         Ok(l2_truncate(&pooled, self.dim))
     }
 
@@ -508,6 +622,34 @@ mod tests {
     fn task_prefix_added_once() {
         assert_eq!(task_prefixed("hello", "Document"), "Document: hello");
         assert_eq!(task_prefixed("hello", "Query"), "Query: hello");
+    }
+
+    #[test]
+    fn gemma_prefix_maps_jina_tasks() {
+        assert_eq!(
+            gemma_prefixed("what is radon?", "Query"),
+            "task: search result | query: what is radon?"
+        );
+        assert_eq!(
+            gemma_prefixed("radon is a gas", "Document"),
+            "title: none | text: radon is a gas"
+        );
+        // Idempotent: callers passing full Gemma prompts are untouched.
+        assert_eq!(
+            gemma_prefixed("task: search result | query: x", "Query"),
+            "task: search result | query: x"
+        );
+        assert_eq!(pooling_for(crate::acquire::EMBEDGEMMA2_MODEL), Pooling::Mean);
+        assert_eq!(pooling_for(crate::acquire::FP32_TEXT_MODEL), Pooling::LastToken);
+    }
+
+    #[test]
+    fn mean_pool_averages_attended_rows_only() {
+        // [1,3,2]: rows [1,2],[3,4] attended, [100,100] padding.
+        let h = ndarray::arr3(&[[[1.0, 2.0], [3.0, 4.0], [100.0, 100.0]]]);
+        let out = mean_pool(&h, 2);
+        assert!((out[0] - 2.0).abs() < 1e-6, "{out:?}");
+        assert!((out[1] - 3.0).abs() < 1e-6, "{out:?}");
     }
 
     #[test]

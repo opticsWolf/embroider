@@ -3,7 +3,7 @@
 //!
 //! Ignored by default: needs an ONNX Runtime dylib and the weight files.
 //! Run: `cargo test --offline --test rerank_e2e -- --ignored` with:
-//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.29.x, the pinned runtime)
+//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.31.x, the pinned runtime)
 //! - `RERANK_E2E_ONNX` → MiniLM-L-6 `onnx/model.onnx`
 //! - `RERANK_E2E_TOK` → MiniLM-L-6 `tokenizer.json`
 //! - `RERANK_MM_E2E_ONNX` / `RERANK_MM_E2E_TOK` → the mMARCO pair
@@ -171,10 +171,11 @@ fn rerank_e2e_q8_parity_vs_goldens() {
     }
     if let (Some(onnx), Some(tok)) = (env("RERANK_MM_E2E_Q8_ONNX"), env("RERANK_MM_E2E_Q8_TOK"))
     {
-        // 0.9 bounds the shipped-path worst (0.864 on en_relevant;
-        // Python-side approx measured 0.679 — truncation differs).
+        // 1.0 bounds the shipped-path worst (0.917 on en_relevant under
+        // onnxruntime 1.31.1, 0.864 under 1.29.0; Python-side approx
+        // measured 0.679 — truncation differs).
         // The rank pins inside check() stay exact: order is the contract.
-        check(&onnx, &tok, "fixtures/golden_rerank_mmarco.json", 0.9);
+        check(&onnx, &tok, "fixtures/golden_rerank_mmarco.json", 1.0);
         ran = true;
     }
     if !ran {

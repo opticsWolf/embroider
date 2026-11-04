@@ -2,7 +2,7 @@
  "contract": "rerank-cross-encoder",
  "model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
  "revision": "233902d25c440f23af6f7d6e94d2946bac0bee0a",
- "provenance": "onnxruntime 1.29.0 CPU; OnlySecond truncation max_length=512, batch-longest padding; torch parity max abs diff 2.86e-06 (sentence-transformers 6.2.0, torch 2.15.0+cpu, same revision)",
+ "provenance": "onnxruntime 1.31.1 CPU; OnlySecond truncation max_length=512, batch-longest padding; re-recorded from 1.29.0 goldens (max fp32 drift 2.86e-06); torch parity vs 1.29.0 goldens max abs diff 2.86e-06 (sentence-transformers 6.2.0, torch 2.15.0+cpu, same revision)",
  "max_length": 512,
  "token_counts": {
   "en_relevant": {"query": 7, "doc": 10},
@@ -19,7 +19,7 @@
  "cases": [
   {"pair": "en_relevant", "score": 7.753108978271484},
   {"pair": "en_irrelevant", "score": -11.129545211791992},
-  {"pair": "de_relevant", "score": 6.092195510864258},
-  {"pair": "de_irrelevant", "score": -9.844346046447754}
+  {"pair": "de_relevant", "score": 6.092192649841309},
+  {"pair": "de_irrelevant", "score": -9.844347953796387}
  ]
 }

@@ -4,7 +4,7 @@
 //!
 //! Ignored by default: needs an ONNX Runtime dylib and the weight files.
 //! Run: `cargo test --offline --test laya_e2e -- --ignored` with:
-//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.29.x, the pinned runtime)
+//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.31.x, the pinned runtime)
 //! - `LAYA_E2E_ONNX` → `laya-td-fp32.onnx` (+ `.data` sidecar alongside)
 //! - `LAYA_E2E_TOK` → `tokenizer.json`
 //! - `LAYA_E2E_CFG` → `rl_agent_config.json`

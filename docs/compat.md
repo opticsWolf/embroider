@@ -9,6 +9,7 @@ proof — okfgraph's suite asserts live vectors against them.
 |---|---|---|---|---|
 | 0.7.x | 0.5.x+ | 0.2.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.8.x | 0.5.x+ | 0.3.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.11.x + pin bump (unreleased) | 0.6.x+ | 0.13.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
 
 Rules:
 
@@ -43,8 +44,8 @@ Rules:
   Pair encoding `[query, doc]` with truncate-doc-side-first (`OnlySecond`)
   and per-batch longest padding; `token_type_ids` fed only when the graph
   declares them (MiniLM 3-input vs mMARCO 2-input, discovered at load).
-  Goldens `fixtures/golden_rerank_{minilm,mmarco}.json` (ORT 1.29.0 CPU,
-  abs 1e-6) + ignored `tests/rerank_e2e.rs`, same gates as vision.
+  Goldens `fixtures/golden_rerank_{minilm,mmarco}.json` (ORT 1.31.1 CPU,
+  abs 1e-6; re-recorded from 1.29.0, max drift 2.9e-6) + ignored `tests/rerank_e2e.rs`, same gates as vision.
 - **Decider contract (0.5.0)**: `Decider::open` / `open_files` /
   `decide` / `decide_many` (`src/decide.rs`, Python `embroider.Decider`).
   `Question::{Choice, Score}` over a state (single-label softmax vs
@@ -55,7 +56,8 @@ Rules:
   (`prompt_first=false`), truncate-state-side-first with manual id
   concat (the pair-tokenizer `OnlySecond` pattern would cut the wrong
   side); temperature is identity (no fitted temps ship with the model).
-  Golden `fixtures/golden_decide_gliclass_small.json` (ORT 1.29.0 CPU,
+  Golden `fixtures/golden_decide_gliclass_small.json` (ORT 1.31.1 CPU
+  (re-recorded from 1.29.0, max drift 1.6e-6),
   abs 1e-6 on probs, exact-match labels) + ignored
   `tests/decide_e2e.rs`, same gates as rerank (incl. the layout proof:
   Rust-built ids equal a single recipe encode).
@@ -152,6 +154,8 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `jina-embeddings-v5-text-small-retrieval` fp16 | `opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16` | CC BY-NC 4.0 (ONNX conversion of the above) |
 | `jina-embeddings-v5-text-nano-retrieval` fp32 / fp16 / int8 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | CC BY-NC 4.0 |
 | `jina-v5-omni-nano-retrieval-vision` fp32 / fp16 | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | CC BY-NC 4.0 (dynamic-grid ONNX export of `jinaai/jina-embeddings-v5-omni-nano-retrieval`; card carries base_model, attribution, changes) |
+| `google/embeddinggemma-2` fp32 | `onnx-community/embeddinggemma-2-ONNX` (`onnx/model.onnx` + `onnx/model.onnx_data`) | Apache-2.0 (embed, mean pooling + Gemma prompts, MRL 128/256/512/768, 8K ctx; text tower only — vision/audio encoders out of scope) |
+| `google/embeddinggemma-2` fp16 | `opticsWolf/embeddinggemma-2-onnx-fp16` (`onnx/model_fp16.onnx` + `onnx/model_fp16.onnx_data`) | Apache-2.0 (CUDA-serving mirror of upstream `model_fp16` @ `daa72c5`; parity 2.1e-4 CPU vs fp32, cos ~1.0; CPU emulated, serve fp32 on CPU) |
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` fp32 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (`onnx/model.onnx`) | Apache-2.0 (rerank, English; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 2.9e-6) |
 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` fp32 | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (`onnx/model.onnx`, not the O1–O4 optimum variants) | Apache-2.0 (rerank, multilingual; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch Δ 7.7e-6) |
 | `knowledgator/gliclass-small-v1.0` fp32 | `knowledgator/gliclass-small-v1.0` (`onnx/model.onnx`) | Apache-2.0 (decide, single/multi-label; upstream repo referenced, never mirrored; CPU parity ≤1e-6 vs goldens, torch exact on 8 B0 probes) |
@@ -161,9 +165,10 @@ embroider's code is MIT OR Apache-2.0. The weights its registry
 | `convaiinnovations/laya-multilingual` fp32 | `opticsWolf/laya-multilingual-fp32-onnx` (`laya-multi-fp32.onnx` + sidecar) | Apache-2.0 (decide-laya, multilingual mmBERT-base 1024/256; fastest CPU of the three) |
 | `Mapika/decider-2b` fp32 | `opticsWolf/decider-2b-fp32-onnx` (`model.onnx` + `model.safetensors` + `decision.json` + `calibration.json`) | Apache-2.0 (decide-2b, slot layout, 32k ctx; self-export of `7614a6c7`, torch Δ 1e-4; reference-row goldens at 5e-4 CPU+CUDA) |
 
-- **Every built-in model is non-commercial.** Any consumer (okfgraph,
-  bobine's callers) that runs them commercially needs a commercial licence
-  from Jina AI.
+- **Jina weights are non-commercial; EmbeddingGemma 2 is Apache-2.0.** Any consumer (okfgraph,
+  bobine's callers) that runs the Jina entries commercially needs a commercial licence
+  from Jina AI. The `google/embeddinggemma-2` entry is the registry's second commercially-usable embed
+  family (after the rerank/decide tasks).
 - **Mirrors and conversions** we publish (e.g. the fp16 mirror) keep the
   upstream licence. Their model card must carry `license`, `base_model`,
   attribution to the upstream authors and a list of the changes made.

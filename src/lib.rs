@@ -48,6 +48,7 @@ pub use acquire::{
     LAYA_BASE, LAYA_BASE_MODEL, LAYA_MULTI, LAYA_MULTI_MODEL, LAYA_TD, LAYA_TD_MODEL,
     NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
     RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
+    EMBEDGEMMA2, EMBEDGEMMA2_FP16_REPO, EMBEDGEMMA2_MODEL, EMBEDGEMMA2_REPO,
 };
 pub use acquire::{DECIDER2B_MODEL};
 pub use diag::{configure_runtime, report, runtime_report, runtime_report_for, save_runtime_report, OrtReport};

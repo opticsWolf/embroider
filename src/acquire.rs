@@ -35,6 +35,18 @@ pub const VISION_NANO_REPO: &str =
 /// Canonical vision model id. Short (not `owner/name`): the id names the
 /// contract, the spec's artifacts name where the files live.
 pub const VISION_NANO_MODEL: &str = "jina-v5-omni-nano-retrieval-vision";
+/// EmbeddingGemma 2 canonical id (Google weights, Apache-2.0). Text-only
+/// tower (270M: 130M backbone + 140M embedder) served from the
+/// `onnx-community` ONNX export; vision/audio encoders are out of scope
+/// (separate slot, like `JinaV5Vision`). Mean pooling + Gemma task prompts
+/// (see `jina.rs`); ladder is the official MRL set 128/256/512/768.
+pub const EMBEDGEMMA2_MODEL: &str = "google/embeddinggemma-2";
+/// ONNX export repo for the EmbeddingGemma 2 text tower (Apache-2.0).
+/// `onnx/model.onnx` + `onnx/model.onnx_data` + `tokenizer.json`.
+pub const EMBEDGEMMA2_REPO: &str = "onnx-community/embeddinggemma-2-ONNX";
+/// FP16 mirror (CUDA serving): upstream `model_fp16` bytes renamed to the
+/// `onnx/model.onnx` layout (Jina-small-mirror convention).
+pub const EMBEDGEMMA2_FP16_REPO: &str = "opticsWolf/embeddinggemma-2-onnx-fp16";
 /// Rerank spike ids (plan `docs/rerank-typed-decision-plan.md` §A0): the
 /// English MiniLM-L-6 and its multilingual mMARCO sibling. Owner/name ids
 /// name the contract directly; the spec's artifacts name the file layout.
@@ -149,10 +161,37 @@ pub const VISION_NANO: ModelSpec = ModelSpec {
     text_partner: Some(NANO_TEXT_MODEL),
 };
 
+/// EmbeddingGemma 2 text tower (Google, Apache-2.0). Mean pooling +
+/// MRL ladder 128/256/512/768, 8K supported context. ONNX comes from the
+/// `onnx-community` export (`onnx/model.onnx` + derived
+/// `onnx/model.onnx_data` sidecar); fp16 serves from the opticsWolf mirror
+/// (parity-gated 2.1e-4 CPU, CUDA-only by design).
+/// Pinned to the export commit verified to contain the text tower.
+pub const EMBEDGEMMA2: ModelSpec = ModelSpec {
+    id: EMBEDGEMMA2_MODEL,
+    native_dim: 768,
+    max_tokens: 8192,
+    ladder: &[128, 256, 512, 768],
+    fp32: Artifact {
+        repo: EMBEDGEMMA2_REPO,
+        file: "onnx/model.onnx",
+        sidecar: None,
+        revision: Some("daa72c51243991dfcaf9f9137d2c573d8f7790c0"),
+    },
+    fp16: Some(Artifact {
+        repo: EMBEDGEMMA2_FP16_REPO,
+        file: "onnx/model_fp16.onnx",
+        sidecar: None,
+        revision: Some("296b2a67735a025ed90e2967d58aba6a41233535"),
+    }),
+    int8: None,
+    text_partner: None,
+};
+
 /// Builtin registry. The default id stays `TEXT_SMALL.id` — adding models
 /// never moves existing graphs (different weights = different vector space).
 pub fn builtin_models() -> &'static [ModelSpec] {
-    &[TEXT_SMALL, TEXT_NANO, VISION_NANO]
+    &[TEXT_SMALL, TEXT_NANO, VISION_NANO, EMBEDGEMMA2]
 }
 
 /// Look up a canonical id in the registry. Unknown ids (custom repos,
@@ -1506,6 +1545,25 @@ mod tests {
         assert!(lookup_model("someone/custom-embed").is_none());
         let a = artifact_for("someone/custom-embed", Precision::Fp16);
         assert_eq!((a.repo.as_str(), a.file.as_str()), ("someone/custom-embed", "onnx/model.onnx"));
+    }
+
+    #[test]
+    fn registry_embedgemma2_contract() {
+        let spec = lookup_model(EMBEDGEMMA2_MODEL).expect("embedgemma2 registered");
+        assert_eq!(spec.native_dim, 768);
+        assert_eq!(spec.max_tokens, 8192);
+        assert_eq!(spec.ladder, &[128, 256, 512, 768]);
+        assert!(spec.text_partner.is_none());
+        let fp32 = artifact_for(EMBEDGEMMA2_MODEL, Precision::Fp32);
+        assert_eq!(
+            (fp32.repo.as_str(), fp32.file.as_str()),
+            (EMBEDGEMMA2_REPO, "onnx/model.onnx")
+        );
+        assert_eq!(fp32.sidecar().as_deref(), Some("onnx/model.onnx_data"));
+        let fp16 = artifact_for(EMBEDGEMMA2_MODEL, Precision::Fp16);
+        assert_eq!((fp16.repo.as_str(), fp16.file.as_str()), (EMBEDGEMMA2_FP16_REPO, "onnx/model_fp16.onnx"));
+        let int8 = artifact_for(EMBEDGEMMA2_MODEL, Precision::Int8);
+        assert_eq!((int8.repo.as_str(), int8.file.as_str()), (EMBEDGEMMA2_REPO, "onnx/model.onnx"));
     }
 
     #[test]

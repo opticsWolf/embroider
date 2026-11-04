@@ -1,5 +1,5 @@
 # embroider
-### Jina v5 embeddings + cross-encoder rerank over ONNX Runtime (Rust core, PyO3)
+### Text embeddings (Jina v5 + EmbeddingGemma 2) + cross-encoder rerank over ONNX Runtime (Rust core, PyO3)
 
 [![CI](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml/badge.svg)](https://github.com/opticsWolf/embroider/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/embroider)](https://crates.io/crates/embroider)
@@ -28,17 +28,24 @@
 
 ## What it is
 
-`embroider` turns text — and images — into vectors: Jina v5 embeddings
-served through ONNX Runtime from a Rust core, with optional PyO3 bindings
-for Python. Since 0.4.x it also scores them: cross-encoder rerankers
+`embroider` turns text — and images — into vectors: embeddings served
+through ONNX Runtime from a Rust core, with optional PyO3 bindings for
+Python. Two embedding families live in the registry: Jina v5
+(non-commercial weights) and EmbeddingGemma 2 (Apache-2.0, Google weights
+via the `onnx-community` export plus a self-published FP16 mirror) — same
+pipeline, different pooling and prompts per model (see [Models](#models)).
+Since 0.4.x it also scores them: cross-encoder rerankers
 (`Reranker`) reorder retrieval candidates with pair-encoded logits from
 the same runtime — no second engine, no torch anywhere in the chain.
 
-### One frozen contract
+### One frozen contract (per model)
 
-Task prefix → tokenize → ONNX forward → last-token pooling → L2 →
-Matryoshka truncate → re-normalise. Every consumer lands in the same
-vector space, or gets a loud error instead of a silent fork.
+Task prefix → tokenize → ONNX forward → pooling → L2 →
+Matryoshka truncate → re-normalise. Jina ids use last-token pooling with
+`Query:`/`Document:` prefixes; `google/embeddinggemma-2` uses mean pooling
+with Gemma prompts (`task: search result | query:` / `title: none | text:`).
+Every consumer lands in the same vector space per model, or gets a loud
+error instead of a silent fork.
 
 ### Two consumers
 
@@ -56,8 +63,8 @@ spaces.
 
 ## Models
 
-Three blessed embedding entries (`src/acquire.rs`), all non-commercial
-weights (licences tabled in [docs/compat.md](docs/compat.md)). Download
+Four blessed embedding entries (`src/acquire.rs`) — Jina weights are
+non-commercial, EmbeddingGemma 2 is Apache-2.0 (licences tabled in [docs/compat.md](docs/compat.md)). Download
 bytes, per-model latencies and CPU-vs-CUDA guidance live in the
 [Model sizes & serving](docs/compat.md#model-sizes--serving) table —
 read it before choosing what a consumer downloads:
@@ -67,6 +74,7 @@ read it before choosing what a consumer downloads:
 | `jinaai/jina-embeddings-v5-text-small-retrieval` (default) | itself (fp32) + `opticsWolf/…-onnx-fp16` mirror (fp16) | fp32, fp16 | General text graphs |
 | `jinaai/jina-embeddings-v5-text-nano-retrieval` | itself (in-repo fp32 + fp16 + int8) | fp32, fp16, int8 | Compact graphs; **required text partner** for vision |
 | `jina-v5-omni-nano-retrieval-vision` | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | fp32, fp16 | Image bytes → text-nano space (`text_partner` pinned) |
+| `google/embeddinggemma-2` | itself (`onnx/model.onnx`) + `opticsWolf/embeddinggemma-2-onnx-fp16` mirror (`onnx/model.onnx` / fp16 `onnx/model_fp16.onnx`) | fp32, fp16 | Permissive text graphs (Apache-2.0); mean pooling + Gemma prompts, MRL 128/256/512/768 |
 
 Plus the task registry (`TaskSpec`, same file) — rerankers, which have
 no vector space and take no `truncate_dim`. The first entries are
@@ -276,8 +284,9 @@ relevant if any part answers); chunk planning is weight-free and
 unit-tested, and single-window inputs score exactly like `score_one`
 (e2e-pinned).
 
-Goldens live in `fixtures/golden_rerank_*.json` (ORT 1.29.0 CPU, abs
-1e-6; torch parity 2.9e-6/7.7e-6 at pinned revisions) with the ignored
+Goldens live in `fixtures/golden_rerank_*.json` (ORT 1.31.1 CPU, abs
+1e-6 — re-recorded from 1.29.0 at 0.13.0, max drift 2.9e-6;
+torch parity 2.9e-6/7.7e-6 at pinned revisions) with the ignored
 `tests/rerank_e2e.rs` asserting them plus per-language relevant-beats-
 irrelevant ordering. Precision notes from the spike: fp16 rejected
 (slower + drift), int8 gated on a wider harness, CUDA opportunistic
@@ -312,7 +321,8 @@ with manual id concatenation in both layouts (the pair-tokenizer
 `OnlySecond` pattern would cut the wrong side). Temperature is identity
 — neither model ships fitted temps (v4's calibration lives in its
 graph). Goldens live in `fixtures/golden_decide_gliclass_{small,v4edge}.json`
-(ORT 1.29.0 CPU; small abs 1e-6, v4 abs 0.03 — the embedded calibrator
+(ORT 1.31.1 CPU — small re-recorded from 1.29.0 at 0.13.0, max drift
+1.6e-6; small abs 1e-6, v4 abs 0.03 — the embedded calibrator
 accumulates kernel-order drift; exact-match labels, torch exact / Δ
 0.028 on the B0 probes) with the ignored `tests/decide_e2e.rs`
 asserting them plus the layout proof per recipe. GLiClass-small is
@@ -576,7 +586,7 @@ shutdown (fallout from ort's exit handler, not the root cause). Point
 `fixtures/golden_jina_v5_text_small.json` pins the frozen vector space:
 4 canonical texts × Query/Document prefixes × dims 64/512 (12 vectors) +
 exact token counts, generated with embroider 0.1.3 / onnxruntime 1.29.0
-CPU / text-embed policy. Unchanged by 0.1.4 (`max_length`) and 0.1.5
+CPU / text-embed policy and byte-identical green on 1.31.1. Unchanged by 0.1.4 (`max_length`) and 0.1.5
 (`precision`, `cpu_arena`) for short inputs at defaults. Consumers vendor
 this file and assert live vectors against it (`abs=1e-6` — catches wrong
 model, pooling, prefix, or truncation; immune to cross-CPU noise). Regenerate only on an
@@ -590,14 +600,16 @@ backs the ignored end-to-end parity test.
 
 ## Testing
 
-- **Rust unit tests** (49, pure — no network, no dylib, no tokenizer
+- **Rust unit tests** (103, pure — no network, no dylib, no tokenizer
   file): device/precision parsing, precision-follows-device resolution,
   FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,
   contract constants, `open()`/`open_files()` validation (dims,
   `max_length`) firing before I/O, offline cache inspection
   (`cache_info`: registry artifact resolution, fake-cache hit/partial/
-  full miss, `auto`/bad-id refusal; generic `cache_info_files`:
+  full miss, `auto`/bad-id refusal; the EmbeddingGemma 2 registry entry
+  (contract, fp32/fp16 artifacts, mirror revision) + Gemma prompt/mean-pool
+  selection; generic `cache_info_files`:
   required/optional semantics, pinned revision, delegation parity), the vision registry entry, the
   vision resize contract (incl. banker's rounding and aspect rejection),
   host tensors bit-identical to `fixtures/vision/` on all 31 grids, the
@@ -609,7 +621,7 @@ backs the ignored end-to-end parity test.
   ```
 
 - **Vision end-to-end** (`tests/vision_e2e.rs`, ignored — needs ORT
-  1.29 dylib, the vision weight files, and ideally CUDA): 5 real
+  1.31 dylib, the vision weight files, and ideally CUDA): 5 real
   figures vs torch-native goldens, cos ≥ 0.9999 fp32 / ≥ 0.999 fp16.
 
   ```bash

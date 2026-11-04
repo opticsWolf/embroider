@@ -2,7 +2,7 @@
  "contract": "rerank-cross-encoder",
  "model": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
  "revision": "1427fd652930e4ba29e8149678df786c240d8825",
- "provenance": "onnxruntime 1.29.0 CPU; OnlySecond truncation max_length=512, batch-longest padding; torch parity max abs diff 7.63e-06 (sentence-transformers 6.2.0, torch 2.15.0+cpu, same revision)",
+ "provenance": "onnxruntime 1.31.1 CPU; re-recorded from 1.29.0 goldens (max fp32 drift 2.38e-06); OnlySecond truncation max_length=512, batch-longest padding; torch parity max abs diff 7.63e-06 (sentence-transformers 6.2.0, torch 2.15.0+cpu, same revision)",
  "max_length": 512,
  "token_counts": {
   "en_relevant": {"query": 7, "doc": 10},
@@ -17,9 +17,9 @@
   "de_irrelevant": {"query": "Wo ist die Hauptstadt von Frankreich?", "doc": "Der Honigdachs lebt in Afrika und ernährt sich von Insekten."}
  },
  "cases": [
-  {"pair": "en_relevant", "score": 4.784177780151367},
-  {"pair": "en_irrelevant", "score": -6.373566627502441},
-  {"pair": "de_relevant", "score": 5.826750755310059},
+  {"pair": "en_relevant", "score": 4.784180164337158},
+  {"pair": "en_irrelevant", "score": -6.373564720153809},
+  {"pair": "de_relevant", "score": 5.826752185821533},
   {"pair": "de_irrelevant", "score": -5.663217544555664}
  ]
 }

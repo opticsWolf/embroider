@@ -3,6 +3,27 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.13.0] — 2026-11-04
+
+### Changed
+- Pinned runtime is now ONNX Runtime 1.31.1 (CUDA 13 build): fp32 goldens
+  re-recorded (`golden_rerank_minilm/mmarco`, `golden_decide_gliclass_small`;
+  max fp32 drift 2.9e-6 vs 1.29.0, rank pins intact) and the mMARCO q8 bound
+  raised 0.9 to 1.0 (measured 0.917 quant-kernel drift, order preserved).
+  E2E headers now point `ORT_DYLIB_PATH` at 1.31.x. `docs/quickref.md`
+  updated to `onnxruntime(-gpu)==1.31.1`.
+
+### Added
+- `google/embeddinggemma-2` builtin embed entry (Apache-2.0, text tower
+  only): `768d / 8K ctx / MRL 128/256/512/768`, artifacts from
+  `onnx-community/embeddinggemma-2-ONNX` (`onnx/model.onnx` + sidecar,
+  pinned `daa72c5`). `JinaV5` selects mean pooling + Gemma prompts
+  (`task: search result | query:` / `title: none | text:`) for this id;
+  all other ids keep the frozen last-token + `Query:`/`Document:` contract.
+  No ONNX ships upstream — the `google` repo is safetensors-only.
+- FP16 mirror `opticsWolf/embeddinggemma-2-onnx-fp16` (upstream `model_fp16` bytes, `onnx/model_fp16.onnx` layout, `296b2a6`): parity 2.1e-4 CPU vs fp32, CUDA-only serving. Registry `fp16` tier wired; `auto` resolves CUDA to fp16, CPU to fp32.
+- Multimodal-input fix: Gemma encodes feed empty `image/video/audio_features` ([0,512]) and read the native `sentence_embedding` head (mean + projection + L2 in-graph).
+
 ## [0.12.1] — 2026-11-02
 
 ### Fixed

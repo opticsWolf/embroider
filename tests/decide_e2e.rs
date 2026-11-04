@@ -3,7 +3,7 @@
 //!
 //! Ignored by default: needs an ONNX Runtime dylib and the weight files.
 //! Run: `cargo test --offline --test decide_e2e -- --ignored` with:
-//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.29.x, the pinned runtime)
+//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.31.x, the pinned runtime)
 //! - small-v1.0: `DECIDE_E2E_ONNX` → `onnx/model.onnx`,
 //!   `DECIDE_E2E_TOK` → `tokenizer.json`
 //! - v4-edge: `DECIDE_E2E_V4_ONNX` → `onnx/model.onnx`,

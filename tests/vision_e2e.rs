@@ -4,7 +4,7 @@
 //! Ignored by default: needs an ONNX Runtime dylib, the vision weight
 //! files, and a GPU for sane runtimes (fp32-CPU is ~6 s/image).
 //! Run: `cargo test --offline --test vision_e2e -- --ignored` with:
-//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.29.x)
+//! - `ORT_DYLIB_PATH` → onnxruntime.dll (1.31.x)
 //! - `VISION_E2E_FP32` → fp32 `model.onnx` (+ sidecar next to it)
 //! - `VISION_E2E_FP16` → fp16 `model.onnx` (+ sidecar next to it)
 //! - `VISION_E2E_TOK`  → omni `tokenizer.json`

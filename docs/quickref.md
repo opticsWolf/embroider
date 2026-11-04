@@ -10,11 +10,11 @@ pip install embroider
 ```
 
 ```rust
-embroider = "0.4"   // shared ORT plumbing; Jina + rerank engines included
+embroider = "0.13"  // shared ORT plumbing; embedding (Jina v5 + Gemma 2) + rerank/decide engines included
 ```
 
-Needs exactly one ONNX Runtime: `onnxruntime==1.29.0` (or
-`-gpu[cuda,cudnn]==1.29.0`), auto-located on import. Override:
+Needs exactly one ONNX Runtime: `onnxruntime==1.31.1` (or
+`-gpu[cuda,cudnn]==1.31.1`), auto-located on import. Override:
 
 ```bash
 export ORT_DYLIB_PATH=/path/to/onnxruntime.dll   # e.g. <venv>/Lib/site-packages/onnxruntime/capi/onnxruntime.dll
@@ -59,8 +59,19 @@ load_registry_file("models/extra.json")   # {"registry_version": 1, "tasks": [..
 export_registry()
 ```
 
-`task` is load-bearing: `query` ↔ `Query:` prefix, `document` ↔
-`Document:` — swapped prefixes silently fork the space.
+`task` is load-bearing and per-model: Jina ids map `query` ↔ `Query:`
+prefix / `document` ↔ `Document:` (last-token pooling), while
+`google/embeddinggemma-2` maps them onto Gemma prompts (`task: search
+result | query:` / `title: none | text:`, mean pooling) — swapped
+prefixes silently fork the space.
+
+```python
+# EmbeddingGemma 2 (Apache-2.0): same calls, Gemma contract inside
+g = JinaV5.open("google/embeddinggemma-2", truncate_dim=512)
+g.encode("what do badgers eat?", task="query")
+g.encode("a badger diet overview", task="document")
+g.encode("what do badgers eat?", task="query")  # fp16 on CUDA via auto
+```
 
 ```python
 # pin weights + tokenizer to an exact commit (reproducibility)
@@ -303,7 +314,7 @@ new minor version + re-index-everything notice.
 
 ```bash
 cargo test --locked                      # 49 pure unit tests (no net/dylib)
-# vision e2e (ignored): needs ORT 1.29 dylib + weight files + CUDA ideally
+# vision e2e (ignored): needs ORT 1.31 dylib + weight files + CUDA ideally
 ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
   VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \
   VISION_E2E_CUDA=1 cargo test --offline --test vision_e2e -- --ignored
