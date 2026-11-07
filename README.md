@@ -185,7 +185,13 @@ with the consumer by design.
 always wins), else the pip-installed `onnxruntime`/`onnxruntime-gpu`
 build when unset. okfgraph's `resolve_ort_dylib()` runs before the native
 module is imported, so bobine and embroider share **one** ORT binary — no
-version/CUDA drift between ingest and import.
+version/CUDA drift between ingest and import. Since 0.13.1 the loader
+path is self-servicing (see [Runtime inventory](#runtime-inventory-which-dylib-which-cuda)):
+before the first CUDA session, `embroider` prepends the venv's NVIDIA
+wheel directories, the `onnxruntime` capi dirs, and the system CUDA/cuDNN
+roots to `PATH` when missing, and delivers the venv's best dylib via
+`ORT_DYLIB_PATH` only when unset — a fresh process no longer depends on
+ambient `PATH` for `cudnn64_9.dll`, and an explicit pin still wins.
 
 ## Text embeddings
 
@@ -477,6 +483,10 @@ from embroider import runtime_info, save_runtime_info, configure_runtime
 info = runtime_info()
 info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
 save_runtime_info("bench/run-001/runtime.json")
+
+from embroider import prepare_cuda_runtime
+prepare_cuda_runtime()   # 0.13.1+: idempotent, never throws; the same
+                         # PATH prep every CUDA open already runs itself
 ```
 
 `configure_runtime(dylib_path=None, dll_dirs=None)` is the write
@@ -489,13 +499,16 @@ are prepended to `PATH` (effective immediately — pass
 makes `cudnn64_9.dll` resolve out of site-packages for cuDNN-backed
 ops like GLiClass's `ReduceMax`). Returns the post-call report. The
 venv scan follows `VIRTUAL_ENV` with a `sys.prefix` fallback, so a
-non-activated interpreter still sees its own installs.
+non-activated interpreter still sees its own installs. `prepare_cuda_runtime()`
+(0.13.1) runs the same directory collection `open()` already performs
+before the first CUDA session — call it directly for parity checks or
+surface tests; CPU-only requests skip it, and it never throws.
 
 The venv scan follows `VIRTUAL_ENV` (unset = installs unknown, the
 probe fields still report); duplicate spellings of one venv
 (`Lib/` vs `lib/`) list once. Keys are stable
 (`ort_dylib`, `ort_dylib_exists`, `sibling_provider_dlls`,
-`cuda_usable`, `ort_installs`, `cuda_runtime_dlls`,
+`cuda_usable`, `ort_installs`, `cuda_runtime_dlls`, `load_dirs`,
 `virtual_env`) — JSON today, trivially TOML-convertible.
 
 ### Explicit local files (air-gapped)
@@ -600,7 +613,7 @@ backs the ignored end-to-end parity test.
 
 ## Testing
 
-- **Rust unit tests** (103, pure — no network, no dylib, no tokenizer
+- **Rust unit tests** (106, pure — no network, no dylib, no tokenizer
   file): device/precision parsing, precision-follows-device resolution,
   FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,

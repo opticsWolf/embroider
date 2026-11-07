@@ -18,6 +18,11 @@ Needs exactly one ONNX Runtime: `onnxruntime==1.31.1` (or
 
 ```bash
 export ORT_DYLIB_PATH=/path/to/onnxruntime.dll   # e.g. <venv>/Lib/site-packages/onnxruntime/capi/onnxruntime.dll
+
+from embroider import prepare_cuda_runtime
+prepare_cuda_runtime()   # 0.13.1+: self-service CUDA loader PATH (venv
+                         # nvidia dists + capi dirs + SDK roots), idempotent;
+                         # every CUDA open already runs this itself
 ```
 
 ## Text embeddings (Python)
@@ -273,6 +278,7 @@ let policy = embroider::SessionPolicy::text_embed();
 // environment diagnostics
 let rep = embroider::report();   // dylib path + CUDA usable?
 let cuda = embroider::cuda_available();   // OnceLock-cached EP check, not a registration probe
+let _dirs = embroider::prepare_cuda_dirs();   // 0.13.1+: PATH prep every CUDA open runs itself; idempotent
 let (owner, name) = embroider::parse_owner_name("org/repo")?;
 
 // request parsing (same strings as the Python kwargs)
@@ -313,7 +319,7 @@ new minor version + re-index-everything notice.
 ## Testing
 
 ```bash
-cargo test --locked                      # 49 pure unit tests (no net/dylib)
+cargo test --locked                      # 106 pure unit tests (no net/dylib)
 # vision e2e (ignored): needs ORT 1.31 dylib + weight files + CUDA ideally
 ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
   VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \
