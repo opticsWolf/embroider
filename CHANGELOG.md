@@ -3,6 +3,29 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.13.1] — 2026-11-07
+
+### Added
+- **CUDA DLL self-service (0.13.1).** A freshly spawned process used to
+  be at the mercy of ambient PATH when an embed session landed on CUDA:
+  with ORT 1.31.1 the CUDA EP requires `cudnn64_9.dll` (and friends),
+  which pip ships in the venv's `nvidia/cudnn`, `nvidia/cu13`, … dists
+  and no standard PATH entry covers; ort's own search can likewise
+  resolve a stray older `onnxruntime.dll` a sibling tool left on PATH
+  (observed 1.17.1 in a model runner's bin) instead of the venv's own
+  GPU wheel. `prepare_cuda_dirs()` (diag) now collects the loader dirs —
+  the venv's `nvidia*` pip dists, the `onnxruntime*` `capi` dirs, the
+  `ORT_DYLIB_PATH` sibling dir, plus the non-pip SDK layouts
+  (`%CUDA_PATH%\bin[\x64]`, `%CUDNN_PATH%\bin`, the cuDNN developer-kit
+  root `%ProgramFiles%\NVIDIA\CUDNN\v*\bin\*\x64`) — and one hook at
+  `resolve_provider_names` (before the CUDA probe makes its first ort
+  call) prepends every dir not already on PATH and delivers the venv's
+  best onnxruntime dylib through `ORT_DYLIB_PATH` **when the env is
+  unset** (an explicitly pinned path stays the documented contract).
+  Idempotent, never-throwing, CPU-only requests skip it. Exposed as
+  `embroider.prepare_cuda_runtime()` for parity/surface checks; the same
+  dirs stay listed in `runtime_info()["load_dirs"]`.
+
 ## [0.13.0] — 2026-11-04
 
 ### Changed
