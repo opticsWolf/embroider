@@ -240,8 +240,12 @@ beats memory pressure. Vision slots likewise run with the CPU arena off.
 
 ## Vision embeddings
 
-Image bytes into the text-nano space (text-nano graphs only — the
-registry's `text_partner` pin refuses anything else).
+Two slots. The Jina slot maps image bytes into the text-nano space
+(text-nano graphs only — the registry's `text_partner` pin refuses
+anything else). The Gemma slot (`GemmaVision`,
+`google/embeddinggemma-2-vision`, Apache-2.0) maps images into the
+`google/embeddinggemma-2` text space cross-modally — same pipeline
+shape, different tower, prompts, and host math.
 
 ### Opening and encoding
 
@@ -262,6 +266,28 @@ fail-fast beats a hung batch). Sessions use the vision-slot policy
 `arena_extend_strategy=kSameAsRequested`, optional `gpu_mem_limit`
 bytes, CPU arena off. Every encode re-checks `seq == image_tokens +
 15` so a wrong tokenizer fails loudly instead of shifting the space.
+
+### Gemma vision slot
+
+`GemmaVision.open(model_id="google/embeddinggemma-2-vision",
+revision=None, cache_dir=None, truncate_dim=512, device="auto",
+precision=None, gpu_mem_limit=None)` embeds one already-resized RGB
+image (`encode_image(rgb_bytes, h, w)` where `(h, w)` is its own
+`gemma_vision_target_size(h, w)` — Pillow bicubic resize on the caller
+side). Two sessions run per encode: the SigLIP-style vision tower
+(`pixel_values` + `pixel_position_ids` in, `image_features` `[K,512]`
+out, K = pooled real-patch count) and the text tower from `text_partner`
+at the same precision tier, fusing with `[bos, boi, image × K, eoi,
+eos]` ids and the native `sentence_embedding` head. Host math ports the
+transformers image processor exactly (aspect-preserving resize to
+multiples of 48, rescale /255, no normalize, patch 16, `[col,row]`
+positions, `[-1,-1]` pad). `auto` precision → fp16 on CUDA / fp32 on
+CPU; explicit fp16-on-CPU is an error (the tower NaNs under emulated
+fp16 — fail fast). `open_files(vision_onnx, text_onnx, tokenizer, ...)`
+takes explicit files. Goldens live in `fixtures/gemmavision/`
+(sentence-transformers references) with the ignored
+`tests/gemma_vision_e2e.rs` asserting cos = 1.0 fp32 CPU/CUDA and fp16
+CUDA plus a cross-modal rank pin.
 
 ## Rerank
 

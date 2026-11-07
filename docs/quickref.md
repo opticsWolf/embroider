@@ -130,6 +130,16 @@ v = JinaV5Vision.open_files("model.onnx", "tokenizer.json")
 
 # cap CUDA arena growth (bytes); CPU arena is always off here
 v = JinaV5Vision.open(gpu_mem_limit=2_000_000_000)
+
+```python
+from embroider import GemmaVision, gemma_vision_target_size
+# Gemma vision slot (Apache-2.0): same encode shape, different tower/prompts/host math
+g = GemmaVision.open("google/embeddinggemma-2-vision")   # resize to gemma_vision_target_size(h, w) first (Pillow bicubic)
+v = g.encode_image(rgb_bytes, h, w)                        # unified with google/embeddinggemma-2 text space
+v = GemmaVision.open("google/embeddinggemma-2-vision", truncate_dim=128, device="cuda").encode_image(rgb_bytes, h, w)
+# explicit files: vision tower + text tower + tokenizer
+g = GemmaVision.open_files("vision_encoder.onnx", "model.onnx", "tokenizer.json")
+```
 ```
 
 Fail-fast surfaces: wrong resolution (`vision_target_size` mismatch),

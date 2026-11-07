@@ -3,6 +3,24 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Added
+- **EmbeddingGemma 2 vision slot (`GemmaVision`, Python `GemmaVision`).**
+  New registry entry `google/embeddinggemma-2-vision` (Apache-2.0):
+  the standalone SigLIP-style vision tower (`onnx/vision_encoder.onnx`
+  + sidecar, upstream in-repo fp32 + fp16, pinned `daa72c5`) fused
+  through the text tower at `text_partner` (`[bos, boi, image x K, eoi,
+  eos]` ids + `image_features [K,512]`, native `sentence_embedding`
+  head). Host math ports the transformers image processor exactly
+  (aspect-preserving resize to multiples of 48, /255, patch 16,
+  `[col,row]` positions, `[-1,-1]` pad). E2E parity cos = 1.00000 fp32
+  CPU/CUDA and fp16 CUDA vs sentence-transformers goldens, with a
+  cross-modal rank pin; fp16-on-CPU is refused (vision tower NaNs under
+  emulated fp16 — fail fast like the Jina slot). Image vectors share the
+  `google/embeddinggemma-2` text space. Fixtures under
+  `fixtures/gemmavision/`, ignored `tests/gemma_vision_e2e.rs`.
+
 ## [0.13.1] — 2026-11-07
 
 ### Added

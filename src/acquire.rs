@@ -47,6 +47,14 @@ pub const EMBEDGEMMA2_REPO: &str = "onnx-community/embeddinggemma-2-ONNX";
 /// FP16 mirror (CUDA serving): upstream `model_fp16` bytes renamed to the
 /// `onnx/model.onnx` layout (Jina-small-mirror convention).
 pub const EMBEDGEMMA2_FP16_REPO: &str = "opticsWolf/embeddinggemma-2-onnx-fp16";
+/// Vision-slot id for EmbeddingGemma 2 (Apache-2.0). Synthetic id like
+/// `jina-v5-omni-nano-retrieval-vision`: there is no vision-only HF repo.
+/// The artifact is the standalone SigLIP-style vision tower
+/// (`onnx/vision_encoder.onnx`); the text tower is fetched through
+/// `text_partner` and fuses the tower output in-graph (soft tokens at the
+/// image-token positions, then the native `sentence_embedding` head).
+/// Vectors share the `EMBEDGEMMA2_MODEL` text space cross-modally.
+pub const EMBEDGEMMA2_VISION_MODEL: &str = "google/embeddinggemma-2-vision";
 /// Rerank spike ids (plan `docs/rerank-typed-decision-plan.md` §A0): the
 /// English MiniLM-L-6 and its multilingual mMARCO sibling. Owner/name ids
 /// name the contract directly; the spec's artifacts name the file layout.
@@ -188,10 +196,38 @@ pub const EMBEDGEMMA2: ModelSpec = ModelSpec {
     text_partner: None,
 };
 
+/// EmbeddingGemma 2 vision slot (Apache-2.0). Image-only encodes run the
+/// vision tower (`pixel_values` + `pixel_position_ids` in, `image_features`
+/// `[K,512]` out, K = pooled real-patch count) and fuse through the text
+/// tower with `[bos, boi, image x K, eoi, eos]` ids. Same MRL ladder and
+/// 8K tower context as the text entry; the text tower comes from
+/// `text_partner` at the same precision tier. Both tiers ship in-repo
+/// (upstream export, pinned below) — no mirror indirection.
+pub const EMBEDGEMMA2_VISION: ModelSpec = ModelSpec {
+    id: EMBEDGEMMA2_VISION_MODEL,
+    native_dim: 768,
+    max_tokens: 8192,
+    ladder: &[128, 256, 512, 768],
+    fp32: Artifact {
+        repo: EMBEDGEMMA2_REPO,
+        file: "onnx/vision_encoder.onnx",
+        sidecar: None,
+        revision: Some("daa72c51243991dfcaf9f9137d2c573d8f7790c0"),
+    },
+    fp16: Some(Artifact {
+        repo: EMBEDGEMMA2_REPO,
+        file: "onnx/vision_encoder_fp16.onnx",
+        sidecar: None,
+        revision: Some("daa72c51243991dfcaf9f9137d2c573d8f7790c0"),
+    }),
+    int8: None,
+    text_partner: Some(EMBEDGEMMA2_MODEL),
+};
+
 /// Builtin registry. The default id stays `TEXT_SMALL.id` — adding models
 /// never moves existing graphs (different weights = different vector space).
 pub fn builtin_models() -> &'static [ModelSpec] {
-    &[TEXT_SMALL, TEXT_NANO, VISION_NANO, EMBEDGEMMA2]
+    &[TEXT_SMALL, TEXT_NANO, VISION_NANO, EMBEDGEMMA2, EMBEDGEMMA2_VISION]
 }
 
 /// Look up a canonical id in the registry. Unknown ids (custom repos,
@@ -1564,6 +1600,25 @@ mod tests {
         assert_eq!((fp16.repo.as_str(), fp16.file.as_str()), (EMBEDGEMMA2_FP16_REPO, "onnx/model_fp16.onnx"));
         let int8 = artifact_for(EMBEDGEMMA2_MODEL, Precision::Int8);
         assert_eq!((int8.repo.as_str(), int8.file.as_str()), (EMBEDGEMMA2_REPO, "onnx/model.onnx"));
+    }
+
+    #[test]
+    fn registry_embedgemma2_vision_contract() {
+        let spec = lookup_model(EMBEDGEMMA2_VISION_MODEL).expect("gemma vision registered");
+        assert_eq!(spec.native_dim, 768);
+        assert_eq!(spec.ladder, &[128, 256, 512, 768]);
+        assert_eq!(spec.text_partner.as_deref(), Some(EMBEDGEMMA2_MODEL));
+        let fp32 = artifact_for(EMBEDGEMMA2_VISION_MODEL, Precision::Fp32);
+        assert_eq!(
+            (fp32.repo.as_str(), fp32.file.as_str()),
+            (EMBEDGEMMA2_REPO, "onnx/vision_encoder.onnx")
+        );
+        assert_eq!(fp32.sidecar().as_deref(), Some("onnx/vision_encoder.onnx_data"));
+        let fp16 = artifact_for(EMBEDGEMMA2_VISION_MODEL, Precision::Fp16);
+        assert_eq!(
+            (fp16.repo.as_str(), fp16.file.as_str()),
+            (EMBEDGEMMA2_REPO, "onnx/vision_encoder_fp16.onnx")
+        );
     }
 
     #[test]

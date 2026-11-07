@@ -21,6 +21,7 @@
 //! - [`diag`] — `OrtReport` observation for logs and diagnostics
 //! - [`jina`] — `JinaV5` + `TokenizerHandle` (the frozen contract)
 //! - [`vision`] — `JinaV5Vision` (the dynamic-grid image contract)
+//! - [`gemma`] — `GemmaVision` (EmbeddingGemma 2 vision slot: tower + text-tower fusion)
 
 pub mod acquire;
 pub mod decide;
@@ -28,6 +29,7 @@ pub mod decider2b;
 pub mod laya;
 pub mod diag;
 pub mod error;
+pub mod gemma;
 pub mod jina;
 pub mod policy;
 pub mod rerank;
@@ -49,6 +51,7 @@ pub use acquire::{
     NANO_TEXT_MODEL, RERANK_MMARCO, RERANK_MMARCO_MODEL,
     RERANK_MINILM, RERANK_MINILM_MODEL, TEXT_NANO, TEXT_SMALL,
     EMBEDGEMMA2, EMBEDGEMMA2_FP16_REPO, EMBEDGEMMA2_MODEL, EMBEDGEMMA2_REPO,
+    EMBEDGEMMA2_VISION, EMBEDGEMMA2_VISION_MODEL,
 };
 pub use acquire::{DECIDER2B_MODEL};
 pub use diag::{configure_runtime, report, runtime_report, runtime_report_for, save_runtime_report, OrtReport};
@@ -65,6 +68,11 @@ pub use decider2b::{
 pub use laya::{LayaDecider, LayaDecision, LayaLongDecision, LayaOption, LayaQuestion, LayaTemperatures, BinningMap};
 pub use vision::{
     vision_target_size, JinaV5Vision, VISION_MAX_PIXELS, VISION_MIN_PIXELS,
+};
+pub use gemma::{
+    gemma_vision_target_size, gemma_default_target_size, GemmaVision,
+    GEMMA_PATCH, GEMMA_POOL, GEMMA_SIDE_MULT, GEMMA_SOFT_BUDGET, GEMMA_MAX_PATCHES,
+    GEMMA_VISION_NATIVE_DIM,
 };
 pub use acquire::{VISION_NANO, VISION_NANO_MODEL, VISION_NANO_REPO};
 pub use policy::{DeviceReq, Precision, SessionPolicy};
@@ -1049,6 +1057,109 @@ impl PyJinaV5Vision {
     }
 }
 
+#[cfg(feature = "extension-module")]
+#[pyclass(name = "GemmaVision")]
+struct PyGemmaVision {
+    inner: GemmaVision,
+}
+
+#[cfg(feature = "extension-module")]
+#[pymethods]
+impl PyGemmaVision {
+    #[staticmethod]
+    #[pyo3(signature = (model_id="google/embeddinggemma-2-vision", revision=None, cache_dir=None, truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None))]
+    fn open(
+        model_id: &str,
+        revision: Option<String>,
+        cache_dir: Option<String>,
+        truncate_dim: usize,
+        device: &str,
+        precision: Option<&str>,
+        gpu_mem_limit: Option<u64>,
+    ) -> PyResult<Self> {
+        let precision = match precision {
+            None => Precision::Auto,
+            Some(s) => Precision::parse(s)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+        };
+        let inner = GemmaVision::open(
+            model_id,
+            revision.as_deref(),
+            cache_dir.map(PathBuf::from),
+            truncate_dim,
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            precision,
+            gpu_mem_limit,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (vision_onnx_path, text_onnx_path, tokenizer_path, truncate_dim=512, device="auto", gpu_mem_limit=None))]
+    fn open_files(
+        vision_onnx_path: &str,
+        text_onnx_path: &str,
+        tokenizer_path: &str,
+        truncate_dim: usize,
+        device: &str,
+        gpu_mem_limit: Option<u64>,
+    ) -> PyResult<Self> {
+        let inner = GemmaVision::open_files(
+            std::path::Path::new(vision_onnx_path),
+            std::path::Path::new(text_onnx_path),
+            std::path::Path::new(tokenizer_path),
+            truncate_dim,
+            DeviceReq::parse(device)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+            gpu_mem_limit,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))?;
+        Ok(Self { inner })
+    }
+
+    /// Embed one already-resized RGB image: `rgb` is raw row-major
+    /// `[h, w, 3]` uint8 bytes where `(h, w)` is its own
+    /// `gemma_vision_target_size` — Pillow bicubic resize on the caller side.
+    fn encode_image(&self, py: Python<'_>, rgb: Vec<u8>, h: usize, w: usize) -> PyResult<Vec<f32>> {
+        py.detach(|| {
+            self.inner
+                .encode_image(&rgb, h, w)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+        })
+    }
+
+    #[getter]
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    #[getter]
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    #[getter]
+    fn used_cuda(&self) -> bool {
+        self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
+    }
+}
+
+/// Resize target for an `(h, w)` image under the Gemma vision resolution
+/// contract — the Pillow side resizes here before calling `encode_image`.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "gemma_vision_target_size")]
+fn gemma_vision_target_size_py(h: u32, w: u32) -> PyResult<(u32, u32)> {
+    gemma_default_target_size(h, w)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e:#}")))
+}
+
 /// Resize target for an `(h, w)` image under the vision resolution
 /// contract — the Pillow side resizes here before calling `encode_image`.
 #[cfg(feature = "extension-module")]
@@ -1670,6 +1781,7 @@ fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLayaDecider>()?;
     m.add_class::<PyDecider2B>()?;
     m.add_class::<PyJinaV5Vision>()?;
+    m.add_class::<PyGemmaVision>()?;
     m.add_function(pyo3::wrap_pyfunction!(available_models, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(register_task_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(register_model_py, m)?)?;
@@ -1680,6 +1792,7 @@ fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(cache_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(cache_info_files_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(vision_target_size_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(gemma_vision_target_size_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(runtime_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(configure_runtime_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(save_runtime_info_py, m)?)?;
