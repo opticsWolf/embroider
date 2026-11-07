@@ -68,6 +68,225 @@ pub fn configure_runtime(
     Ok(runtime_report())
 }
 
+/// The interpreter prefix the binding recorded at import time
+/// ([`note_venv_prefix`], called from the pymodule init): `sys.prefix`
+/// — the running interpreter's own root, which IS the venv root when a
+/// venv is in play, and never requires activation the way
+/// `VIRTUAL_ENV` does.
+static VENV_PREFIX: std::sync::OnceLock<Option<String>>
+    = std::sync::OnceLock::new();
+
+/// Register the prefix (the pymodule init; the first caller wins so a
+/// notebook re-import keeps the first interpreter's root).
+#[doc(hidden)]
+pub fn note_venv_prefix(prefix: Option<String>) {
+    let _ = VENV_PREFIX.set(prefix);
+}
+
+/// The recorded prefix, if the pymodule ran and captured one.
+#[doc(hidden)]
+pub fn venv_prefix() -> Option<String> {
+    VENV_PREFIX.get().and_then(|o| o.clone())
+}
+
+/// Where each reported DLL lives — the loader dirs of the CUDA lane:
+/// the dylib's own dir plus the parent of every `cudnn`/`cublas`/… DLL
+/// found in the venv's `nvidia*` pip dists and in sibling
+/// `onnxruntime*` `capi` dirs. This is exactly [`runtime_report`]'s
+/// `load_dirs` computation, factored out for the auto-prepend.
+fn cuda_load_dirs(venv: Option<&str>) -> Vec<String> {
+    let mut out: std::collections::BTreeSet<String> = Default::default();
+    if let Some(p) = std::env::var("ORT_DYLIB_PATH").ok() {
+        if let Some(parent) = std::path::Path::new(&p).parent() {
+            out.insert(parent.to_string_lossy().into_owned());
+        }
+    }
+    for sp in site_packages_dirs_for(venv.map(std::path::PathBuf::from)) {
+        let Ok(rd) = std::fs::read_dir(&sp) else { continue };
+        for e in rd.filter_map(|e| e.ok()) {
+            let p = e.path();
+            if !p.is_dir() {
+                continue;
+            }
+            let name = p.file_name().and_then(|s| s.to_str())
+                .unwrap_or("").to_lowercase();
+            if name.starts_with("nvidia") && !name.ends_with(".dist-info") {
+                for (_package, dlls) in scan_nvidia_dist(&p) {
+                    for dll in dlls {
+                        if let Some(d) = std::path::Path::new(&dll).parent() {
+                            out.insert(d.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+            } else if name.starts_with("onnxruntime")
+                    && !name.ends_with(".dist-info") {
+                // provider DLLs live beside the runtime in `capi` —
+                // a dist found here may be the loaded one already, but
+                // a second install (CPU/GPU side by side) must not be
+                // invisible to the search path.
+                let capi = p.join("capi");
+                if capi.is_dir() {
+                    out.insert(capi.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Non-pip layouts the CUDA EP's DLLs can live in: the cuDNN
+/// developer-kit install (`<ProgramFiles>\\NVIDIA\\CUDNN\\v<ver>\\bin\\
+/// <cuda>\\x64` — cudnn 9's Windows layout keeps `cudnn64_9.dll` there
+/// and nothing else puts it on PATH), `%CUDA_PATH%\\bin[\\x64]`, and a
+/// `CUDNN_PATH` env hint. *program_files* lets tests point at a fake
+/// root instead of the real one.
+fn sdk_cuda_dll_dirs(program_files: Option<String>) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(cp) = std::env::var("CUDA_PATH") {
+        out.push(std::path::PathBuf::from(&cp).join("bin"));
+        out.push(std::path::PathBuf::from(&cp).join("bin").join("x64"));
+    }
+    if let Ok(c) = std::env::var("CUDNN_PATH") {
+        out.push(std::path::PathBuf::from(&c).join("bin"));
+        out.push(std::path::PathBuf::from(c));
+    }
+    let pf = match program_files {
+        Some(p) => std::path::PathBuf::from(p),
+        None => match std::env::var("ProgramFiles") {
+            Ok(pf) => std::path::PathBuf::from(pf),
+            Err(_) => return out,
+        },
+    };
+    let cudnn_root = pf.join("NVIDIA").join("CUDNN");
+    if let Ok(rd) = std::fs::read_dir(&cudnn_root) {
+        for v in rd.filter_map(|e| e.ok()) {
+            let bin = v.path().join("bin");
+            let Ok(subs) = std::fs::read_dir(&bin) else { continue };
+            for sub in subs.filter_map(|e| e.ok()) {
+                out.push(sub.path().join("x64"));
+                out.push(sub.path());
+            }
+        }
+    }
+    out
+}
+
+fn path_has_entry(path: &str, dir: &str) -> bool {
+    let norm = |s: &str| s.trim_end_matches(['/','\\']).to_lowercase();
+    path.split(if cfg!(windows) { ";" } else { ":" })
+        .any(|e| norm(e) == norm(dir))
+}
+
+/// The best ONNX Runtime dylib the venv ships: the `capi` dir of every
+/// `onnxruntime*` dist (GPU builds first), ranked by the version the
+/// sibling dist-info dir carries. ort's load-dynamic search walks PATH
+/// and resolves whatever stray `onnxruntime.dll` a sibling tool dropped
+/// there (observed: a 1.17.1 in a model-runner's bin) — passing the
+/// venv's own dylib through `ORT_DYLIB_PATH` makes the loaded version a
+/// choice instead of a lottery.
+fn best_ort_dylib(venv: Option<&str>) -> Option<std::path::PathBuf> {
+    let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
+    // Windows filesystems are case-insensitive, so the same venv can
+    // surface as both `Lib/…` and `lib/…` — dedupe by the canonical dir
+    // (the same spelling caveat runtime_report handles for its report).
+    let mut site_packages: Vec<std::path::PathBuf> = Vec::new();
+    let mut seen_sp: std::collections::HashSet<String> = Default::default();
+    for sp in site_packages_dirs_for(venv.map(std::path::PathBuf::from)) {
+        let key = std::fs::canonicalize(&sp)
+            .map(|c| c.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| sp.to_string_lossy().into_owned());
+        if seen_sp.insert(key) {
+            site_packages.push(sp);
+        }
+    }
+    for sp in site_packages {
+        let Ok(rd) = std::fs::read_dir(&sp) else { continue };
+        for e in rd.filter_map(|e| e.ok()) {
+            let dist = e.path();
+            if !dist.is_dir() {
+                continue;
+            }
+            let name = dist.file_name().and_then(|s| s.to_str())
+                .unwrap_or("").to_lowercase();
+            if !name.starts_with("onnxruntime") || name.ends_with(".dist-info") {
+                continue;
+            }
+            let dll = dist.join("capi").join("onnxruntime.dll");
+            if !dll.is_file() {
+                continue;
+            }
+            // The sibling dist-info carries the version the static
+            // checker verifies anyway (BadVersion) — parse it for rank
+            // (`onnxruntime_gpu-1.31.1.dist-info` → "1.31.1").
+            let ver = std::fs::read_dir(&sp).ok()
+                .and_then(|de| de.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .find(|n| {
+                        let n = n.to_lowercase();
+                        n.starts_with(&name) && n.ends_with(".dist-info")
+                    }))
+                .and_then(|n| {
+                    n.to_lowercase()
+                        .rsplit_once('-')
+                        .map(|(_, tail)| {
+                            tail.trim_end_matches(".dist-info").to_string()
+                        })
+                })
+                .unwrap_or_else(|| "0".to_string());
+            // GPU builds outrank same-version CPU builds.
+            let rank = format!("{ver}{}", if name.contains("gpu") {"1"} else {"0"});
+            found.push((rank, dll));
+        }
+    }
+    found.sort();
+    found.last().map(|(_r, p)| p.clone())
+}
+
+/// Put the CUDA lane's DLL dirs on the search path so a fresh process
+/// with no ambient PATH knowledge — the ``okf`` CLI subprocess, a
+/// notebook, a service — can build a CUDA session against the venv's
+/// pip `nvidia*` dists or a cuDNN developer-kit install. The dirs are
+/// found with [`cuda_load_dirs`] + [`sdk_cuda_dll_dirs`]; dirs already
+/// on PATH are left alone and the rest are *prepended* via
+/// [`configure_runtime`], which re-sets PATH in one edit.
+///
+/// Runs before the first CUDA session build (the hook sits in the
+/// provider resolution, before any EP is registered), is idempotent,
+/// and never fails: missing candidates are skipped, and a loader that
+/// had nothing to add answers `prepended: []`.
+pub fn prepare_cuda_dirs(venv: Option<&str>) -> serde_json::Value {
+    let mut candidates = cuda_load_dirs(venv);
+    for d in sdk_cuda_dll_dirs(None) {
+        candidates.push(d.to_string_lossy().into_owned());
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    let candidates = candidates.into_iter().filter(
+        |d| std::path::Path::new(d).is_dir()
+            && !path_has_entry(&path, d)).collect::<Vec<_>>();
+    // Deliver the venv's own ONNX Runtime too — ort's load-dynamic
+    // search otherwise resolves whatever onnxruntime.dll a sibling tool
+    // dropped on PATH. An explicitly pinned ORT_DYLIB_PATH is respected:
+    // the env is only read at first init, so consumers who set it (the
+    // documented contract) keep their choice.
+    let dylib = std::env::var("ORT_DYLIB_PATH").err()
+        .and_then(|_| best_ort_dylib(venv))
+        .map(|p| p.to_string_lossy().into_owned());
+    if candidates.is_empty() && dylib.is_none() {
+        return serde_json::json!({ "prepended": [], "candidates": 0,
+                                   "dylib": serde_json::Value::Null });
+    }
+    if configure_runtime(dylib.as_deref(), &candidates).is_err() {
+        // configure_runtime only bails for a missing dylib — this
+        // arm is defensive and must never make the session path worse.
+        return serde_json::json!({ "prepended": [], "candidates": 0,
+                                   "dylib": serde_json::Value::Null });
+    }
+    serde_json::json!({
+        "prepended": candidates, "candidates": candidates.len(),
+        "dylib": dylib,
+    })
+}
+
 /// A snapshot of the ONNX Runtime situation in this process.
 #[derive(Clone, Debug)]
 pub struct OrtReport {
@@ -349,6 +568,12 @@ pub fn save_runtime_report(path: &std::path::Path) -> anyhow::Result<String> {
 mod tests {
     use super::*;
 
+    /// The env-touching tests here read-modify-write the process PATH;
+    /// cargo runs test threads in parallel, so they serialize on this
+    /// (each saves its `before` and restores, which would otherwise
+    /// clobber a sibling mid-flight).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn runtime_report_has_stable_shape() {
         let rep = runtime_report();
@@ -379,7 +604,93 @@ mod tests {
     }
 
     #[test]
+    fn prepare_cuda_dirs_prepends_nvidia_pip_bin_dirs() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let root = std::env::temp_dir().join("embroider-nvidia-pip-test");
+        let bin = root.join("Lib").join("site-packages").join("nvidia")
+            .join("cudnn").join("bin");
+        std::fs::create_dir_all(&bin).ok();
+        std::fs::write(bin.join("cudnn64_9.dll"), b"x").ok();
+        let before = std::env::var("PATH").unwrap_or_default();
+        let rep = prepare_cuda_dirs(Some(root.to_str().unwrap()));
+        let after = std::env::var("PATH").unwrap_or_default();
+        assert!(after.contains("cudnn"), "cudnn dir should land on PATH {after}");
+        assert!(rep["prepended"].as_array().unwrap().len() >= 1);
+        // idempotent: a second call prepends nothing (already on PATH)
+        let rep2 = prepare_cuda_dirs(Some(root.to_str().unwrap()));
+        assert_eq!(rep2["prepended"].as_array().map(Vec::len), Some(0));
+        // Restore so test order never leaks PATH edits.
+        unsafe {
+            std::env::set_var("PATH", before);
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prepare_cuda_dirs_delivers_the_venv_ort_dylib() {
+        let root = std::env::temp_dir().join("embroider-ort-dist-test");
+        let capi = root.join("Lib").join("site-packages").join("onnxruntime_gpu")
+            .join("capi");
+        std::fs::create_dir_all(&capi).ok();
+        let dll = capi.join("onnxruntime.dll");
+        std::fs::write(&dll, b"x").ok();
+        let info = root.join("Lib").join("site-packages")
+            .join("onnxruntime_gpu-1.31.1.dist-info");
+        std::fs::create_dir_all(&info).ok();
+        std::fs::write(info.join("METADATA"), b"x").ok();
+        let before = std::env::var("ORT_DYLIB_PATH").ok();
+        if before.is_some() {
+            // the contract: an explicitly pinned path is respected, so
+            // this test needs the env unset to exercise the delivery
+            unsafe { std::env::remove_var("ORT_DYLIB_PATH"); }
+        }
+        let before_path = std::env::var("PATH").unwrap_or_default();
+        let rep = prepare_cuda_dirs(Some(root.to_str().unwrap()));
+        let got = std::env::var("ORT_DYLIB_PATH").ok();
+        // Compare case-insensitively: Windows is case-insensitive and
+        // the scan may hand back either spelling of the same dir.
+        let got_norm = got.as_ref().map(|p| p.replace("\\\\", "/").to_lowercase());
+        let want_norm = dll.to_str().unwrap().replace("\\\\", "/").to_lowercase();
+        assert_eq!(got_norm.as_deref(), Some(want_norm.as_str()),
+                   "delivered dylib should be pinned: {got:?}");
+        assert_eq!(rep["dylib"].as_str().map(|p| p.replace("\\\\", "/").to_lowercase()),
+                   Some(want_norm.clone()));
+        unsafe { std::env::set_var("PATH", before_path); }
+        // restore the caller-precedence env (or its absence)
+        match before {
+            Some(v) => unsafe { std::env::set_var("ORT_DYLIB_PATH", v); },
+            None => unsafe { std::env::remove_var("ORT_DYLIB_PATH"); },
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prepare_cuda_dirs_adds_the_cudnn_sdk_root() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let pf = std::env::temp_dir().join("embroider-sdk-fake");
+        let laid = pf.join("NVIDIA").join("CUDNN").join("v9.5")
+            .join("bin").join("13.1").join("x64");
+        std::fs::create_dir_all(&laid).ok();
+        std::fs::write(laid.join("cudnn64_9.dll"), b"x").ok();
+        let before = std::env::var("PATH").unwrap_or_default();
+        let dirs = sdk_cuda_dll_dirs(Some(pf.to_str().unwrap().to_string()));
+        assert!(dirs.iter().any(|d| d == &laid), "sdk layout found: {dirs:?}");
+        // and through the public entry the dir reaches PATH
+        let rep = configure_runtime(None, &dirs.into_iter()
+            .map(|d| d.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()).expect("ok");
+        let after = std::env::var("PATH").unwrap_or_default();
+        assert!(after.to_lowercase().contains("embroider-sdk-fake"));
+        let _ = rep;
+        unsafe {
+            std::env::set_var("PATH", before);
+        }
+        std::fs::remove_dir_all(&pf).ok();
+    }
+
+    #[test]
     fn configure_runtime_prepends_dll_dirs() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join("embroider-dll-dir-test");
         std::fs::create_dir_all(&dir).ok();
         let before = std::env::var("PATH").unwrap_or_default();

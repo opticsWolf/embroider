@@ -1632,9 +1632,37 @@ fn save_runtime_info_py(path: &str) -> PyResult<String> {    diag::save_runtime_
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
 }
 
+/// Put the CUDA lane's DLL dirs on the loader path (venv `nvidia*` pip
+/// dists, onnxruntime `capi`, cuDNN/CUDA SDK roots). Normally called
+/// internally before the first CUDA session; exposed for callers that
+/// want to verify what filled in, or force it before their own sessions.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "prepare_cuda_runtime")]
+fn prepare_cuda_runtime_py(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+    let venv: Option<String> = std::env::var("VIRTUAL_ENV").ok().or_else(|| {
+        py.import("sys")
+            .ok()?
+            .getattr("prefix")
+            .ok()?
+            .extract()
+            .ok()
+    });
+    value_to_py(py, &diag::prepare_cuda_dirs(venv.as_deref()))
+}
+
 #[cfg(feature = "extension-module")]
 #[pymodule]
-fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Record the interpreter root for diag/policy-time loader fixes:
+    // `sys.prefix` is the running interpreter's own root (the venv root
+    // when a venv is in play) and needs no activation the way
+    // `VIRTUAL_ENV` does. First import wins; see diag::note_venv_prefix.
+    let prefix: Option<String> = py
+        .import("sys")
+        .ok()
+        .and_then(|sys| sys.getattr("prefix").ok())
+        .and_then(|p| p.extract().ok());
+    diag::note_venv_prefix(std::env::var("VIRTUAL_ENV").ok().or(prefix));
     m.add_class::<PyJinaV5>()?;
     m.add_class::<PyJinaTokenizer>()?;
     m.add_class::<PyReranker>()?;
@@ -1655,6 +1683,7 @@ fn embroider(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(runtime_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(configure_runtime_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(save_runtime_info_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(prepare_cuda_runtime_py, m)?)?;
     m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;
     m.add("MAX_LENGTH", MAX_LENGTH)?;

@@ -205,6 +205,18 @@ impl Precision {
 /// Resolve the internal provider list for a device request. Accelerators
 /// stay opportunistic: requested-but-missing warns once and degrades to CPU.
 pub(crate) fn resolve_provider_names(device: DeviceReq) -> (Vec<String>, bool) {
+    // Prepare the loader BEFORE any ort call: `cuda_available()` is this
+    // process's first ORT touch, so the dylib choice and the CUDA EP's
+    // cuDNN/cuBLAS deps must already be settled here — a fresh process
+    // (the `okf` CLI, a notebook) otherwise resolves whatever stray
+    // onnxruntime.dll a sibling tool dropped on PATH, and the CUDA
+    // kernels crash on a missing cudnn64_9.dll. Idempotent +
+    // never-throwing; the pins a caller set explicitly are respected.
+    // CPU requests skip it: they need neither CUDA EPs nor the deps.
+    if !matches!(device, DeviceReq::Cpu) {
+        let venv = crate::diag::venv_prefix();
+        let _ = crate::diag::prepare_cuda_dirs(venv.as_deref());
+    }
     let cuda = cuda_available();
     let used_cuda = cuda && !matches!(device, DeviceReq::Cpu);
     let names = match device {
