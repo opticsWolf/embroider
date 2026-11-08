@@ -60,6 +60,9 @@ pip install embroider                       # Linux / Windows / macOS-arm64, Pyt
 pip install onnxruntime==1.31.1             # or -gpu[cuda,cudnn]==1.31.1 — exactly one, never both
 ```
 
+`okfgraph` pulls it in automatically; standalone, install the wheel plus
+exactly one runtime as above (`ORT_DYLIB_PATH` overrides discovery).
+
 From source: `maturin build --release`, then install the wheel
 (`maturin develop` needs pip, which uv venvs lack).
 
@@ -94,8 +97,9 @@ cargo test --locked                      # 111 pure unit tests, no net/dylib
 Engine parity is fixture-pinned and env-gated (`tests/*_e2e.rs`, ignored —
 needs the ORT dylib, weight files, ideally CUDA; see the Testing section in
 [quickref](docs/quickref.md)). Python parity lives with okfgraph
-(`tests/test_parity.py`, slow): Rust output against a numpy/transformers
-replication at ≤ 1e-5. Regenerate goldens only on an intentional contract
+(`tests/test_parity.py`, slow; `test_rust_backend.py` / `test_rust_e2e.py`
+cover the wheel import, count-tokens contract, and real-model encodes):
+Rust output against a numpy/transformers replication at ≤ 1e-5. Regenerate goldens only on an intentional contract
 change — a new minor version plus a re-index-everything notice.
 
 ## Failure policy

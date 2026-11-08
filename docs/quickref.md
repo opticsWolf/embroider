@@ -50,7 +50,8 @@ from embroider import available_models
 available_models()
 
 # register a new model under a known kind (no source change):
-# kinds are rerank | decide | decide-laya | decide-2b (+ embed below)
+# task kinds are rerank | decide | decide-laya | decide-2b
+# (+ register_model below for the embed side)
 from embroider import register_task
 register_task("myorg/my-reranker", "rerank", 256,
               {"repo": "myorg/my-reranker-onnx", "file": "onnx/model.onnx"},
@@ -58,6 +59,11 @@ register_task("myorg/my-reranker", "rerank", 256,
                   "sidecar": "model_q8.onnx.data"},
               provenance={"measured": False, "notes": "self-quant, bench pending"},
               probe=True)
+# embed side mirrors it (native_dim, max_tokens, ladder, text_partner)
+from embroider import register_model
+register_model("myorg/my-encoder", 768, 8192, [128, 256, 512, 768],
+               {"repo": "myorg/my-encoder-onnx", "file": "onnx/model.onnx"},
+               text_partner=None, provenance={"measured": False})
 # file form (strict schema, version-checked) + overlay export (sorted, round-trippable)
 from embroider import load_registry_file, export_registry
 load_registry_file("models/extra.json")   # {"registry_version": 1, "tasks": [...], "models": [...]}
@@ -90,6 +96,9 @@ m = JinaV5.open("myorg/my-encoder")
 m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8")
 ```
 
+`open(model_id, revision=None, cache_dir=None, truncate_dim=512,
+device="auto", max_length=None, precision=None, cpu_arena=False)` —
+all loaders share this shape (minus `truncate_dim` off-embedding).
 `open` is the single expensive step (download + session build); a failed
 open is cached and re-raised, so config errors fail fast once. `max_length`
 caps encodes at 1..=32768 (`None` = 8192 compat default; `.max_length`
@@ -118,7 +127,8 @@ time; pass `True` only when peak throughput beats memory pressure.
 `auto` follows the *resolved* device, so CUDA-requested-but-missing degrades
 to FP32 weights instead of stranding FP16 on CPU (FP16-on-CPU runs >40x
 slower than FP32-CPU — measured). `fp16` maps the default id to the published
-FP16 mirror repo; explicit model ids always win untouched. An explicit
+FP16 mirror repo
+(`opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16`); explicit model ids always win untouched. An explicit
 `fp16`-on-CPU warns loudly but is honoured for text. Do not mix precisions
 in one index — FP32 vs FP16 weights shift vectors, same as mixing tuning
 levels.
@@ -174,6 +184,8 @@ v = GemmaVision.open("google/embeddinggemma-2-vision", truncate_dim=128, device=
 # explicit files: vision tower + text tower + tokenizer
 g = GemmaVision.open_files("vision_encoder.onnx", "model.onnx", "tokenizer.json")
 ```
+
+MRL truncate ladder 128/256/512/768 (native 768d, 8K context).
 
 Two sessions run per Gemma encode: the SigLIP-style vision tower
 (`pixel_values` + `pixel_position_ids` in, `image_features` `[K,512]` out,
@@ -236,6 +248,7 @@ d4 = Decider.open("knowledgator/gliclass-v4-edge")   # labels-first layout, prom
 d4.decide(state, [("choice", "Apply the refund policy.", ["approved", "denied", "escalate"])])
 
 d.count_tokens(state)   # true length, no specials
+d.decide_many([(state, q1), (state2, q2)])   # batch across states
 ```
 
 `Choice` is single-label (stable softmax — exactly one option wins);
@@ -243,8 +256,8 @@ d.count_tokens(state)   # true length, no specials
 thresholds, because raw multi-label sigmoids are systematically
 over-confident (the B0 probe: `quantum physics` at 1.0 on a football text).
 `Noul` is declared but loud-unsupported — no registered model serves it.
-Small-v1.0 is text-first (`state + labels + SEP + instructions`,
-`prompt_first=false`); v4-edge is labels-first (`prompt_first=true`, per
+Small-v1.0 is text-first (`state + (<<LABEL>>option)* + <<SEP>> +
+instructions`, `prompt_first=false`); v4-edge is labels-first (`prompt_first=true`, per
 model in the registry — `open()` resolves it, `open_files` takes it
 caller-side). Temperature is identity — neither model ships fitted temps
 (v4's calibration lives in its graph). Goldens in
@@ -282,7 +295,8 @@ Score carries ordered LEVELS (one distribution — expected value in `.value`,
 top level in `.label`); Noul carries one statement (P(true) — the rerank
 primitive) and must not be confused with GLiClass multi-label Score, so each
 loader refuses the other's ids. Temperature is fitted per-bucket from the
-config, clamped to [0.5, 5.0] with rejections in `temperature_report()`.
+config, clamped to [0.5, 5.0] with rejections in `temperature_report()`
+(the shipped `choice:11+` 0.1006 sharpens ~10x — the clamp refuses it).
 Decode is `logits/t → softmax → unpermute → per-type shape` in float64 (the
 agent's numpy arithmetic), cast at the boundary; the act head reads
 `softmax(act_logits)[0]` (`.act_probability`, feeds escalation).
@@ -301,6 +315,10 @@ d.decide("My card was charged twice.", [
 # -> [(label, probs, value|None, confidence, answer_confidence), ...]  (no act head)
 d.temperature_report()   # ([2.465, 1.0, 0.05], clamp rejections) — [0.05, 5.0] range
 ```
+
+`open(model_id, ...)` takes the same shared shape; `open_files(onnx,
+tokenizer, decision, calibration)` takes all four files explicitly (both
+configs required, never optional).
 
 One row per question: `Context:` + state, then lettered choices (`(A) …`,
 one label token each past 10 options) and a trailing `Answer: (` slot scored
@@ -372,7 +390,7 @@ info["cached"]   # True when every required file is present
 from embroider import runtime_info, save_runtime_info, prepare_cuda_runtime
 info = runtime_info()
 info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
-save_runtime_info("bench/run-001/runtime.json")   # pretty JSON next to the numbers
+save_runtime_info("bench/run-001/runtime.json")   # pretty JSON next to the numbers (creates parent dirs)
 
 prepare_cuda_runtime()   # idempotent, never throws; the same PATH prep
                          # every CUDA open already runs itself
