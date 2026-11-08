@@ -2,9 +2,10 @@
 
 How we get weights from a HuggingFace checkpoint into a served,
 parity-gated ONNX artifact — and everything that bit us along the way.
-Covers the three conversions done to date (decider-2b weightless,
-strands pointer-head fused, sauhsoj verification) plus the quantization
-ladder and the ORT execution gotchas. Read this before touching a new
+Covers the conversions done to date (decider-2b weightless,
+strands pointer-head fused, sauhsoj verification, Gemma 2 vision-tower
+verification) plus the quantization ladder and the ORT execution
+gotchas. Read this before touching a new
 checkpoint.
 
 ## 0. Principles (non-negotiable)
@@ -131,10 +132,14 @@ every script, changed only ids/config filename):
    padded batch per record). Fused-vs-unfused must agree to ~5e-5
    (we measured 4.9e-05); fused-vs-torch is the ship gate.
 
-### 3c. Verifying someone else's export (sauhsoj pattern)
+### 3c. Verifying someone else's export (sauhsoj / Gemma-vision pattern)
 
 Use when: a community ONNX build already exists. Don't rebuild what
-you can verify.
+you can verify. Second instance: the Gemma 2 vision tower
+(`onnx-community/embeddinggemma-2-ONNX`, `vision_encoder*.onnx`),
+gated against sentence-transformers references (fp32 cos 1.0
+CPU/CUDA, fp16 cos 1.0 CUDA) plus a cross-modal rank pin — with the
+tower served through the text tower at `text_partner`, never standalone.
 
 1. Confirm the contract from `config.json` (`inputs`/`outputs` names,
    prompt layout, temperature table) and the method from the README.
@@ -173,13 +178,18 @@ you can verify.
   still corrupt). Neither is `use_env_allocators`.
 - **cuDNN DLL search.** ORT's CUDA EP dlopens `cudnn64_9.dll` by bare
   name; it is invisible inside `site-packages` until the dirs hit
-  `PATH`/`add_dll_directory`. `embroidery.configure_runtime(dll_dirs=
-  runtime_info()["load_dirs"])` is the sanctioned exposure — bench
-  and e2e processes both need it. (`_9` is the major, not age:
+  `PATH`/`add_dll_directory`. `embroider.prepare_cuda_runtime()` (which
+  is what every CUDA `open()` runs itself) is the sanctioned exposure —
+  bench and e2e processes both need it. (`_9` is the major, not age:
   cuDNN 9.24 is current; only ReduceMax/Einsum graphs load it, which
   is why rerank/Laya ran while GLiClass failed.)
 - **ORT_DYLIB_PATH is first-touch.** The dylib binds on first `open()`
   (the probe counts). Set it before anything opens a session.
+- **CPU-emulated fp16 can NaN a whole tower (Gemma vision).** ORT CPU
+has no fp16 arithmetic — fp16 graphs run emulated, and the Gemma
+vision tower comes out all-NaN while the text tower merely drifts
+(~2e-4). A tower that NaNs on CPU must refuse explicit fp16-on-CPU
+(fail fast, like the Jina vision slot), never warn-and-continue.
 
 ## 5. Quantization (what works, what doesn't, and why)
 
@@ -194,7 +204,7 @@ model now reads: **fp32** (faithful) -> **q8** (no flips, ~1/4 size)
 | dynamic int8 | int8 weights + fp32 activations, one call | REJECTED — drift 2.8-5.4 + flips (Laya); the -1e4 mask sentinel is unquantizable |
 | static int8 | + calibration data | REJECTED — 9997 on the sentinel |
 | encoder-only int8 | partial | REJECTED — 2.85, no CPU relief |
-| fp16 | halves download/VRAM, CUDA-only (CPU >40x slower, measured) | ADOPTED (Laya CUDA variants); the sane next step for decider-2b |
+| fp16 | halves download/VRAM, CUDA-only (CPU >40x slower, measured; some towers NaN under CPU emulation — see §4) | ADOPTED (Laya CUDA variants; Jina + Gemma text/vision fp16 mirrors for CUDA serving, parity-gated, CPU refused where it NaNs) |
 | MatMulNBits q4 (w:4b, s:fp16) | weight-only, activations fp32 | ADOPTED with a documented flip (strands q4f16: worst 0.2074, 1 flip) |
 | MatMulNBits q8 (w:8b, s:fp16) | weight-only | ADOPTED (strands q8: worst 0.0504, 0 flips) |
 | int4/GPTQ/AWQ, QAT | — | untested / unavailable post-hoc |
@@ -216,8 +226,10 @@ matmul weights lose precision. Two consequences that follow everywhere:
 Per-model outlook (see the q8/q4 discussion): decider-2b q8 first
 (same decoder family, gate noul), v4-edge q8 second (weight-only
 dodges the sentinel kill), Laya q8 third (temps amplify; fp16 covers
-CUDA), rerankers only for bundle size, embeddings never (quant shifts
-the vector space — needs retrieval re-eval, not parity).
+CUDA), rerankers only for bundle size. Embeddings take fp16 mirrors
+for CUDA only (parity-gated, e.g. Gemma 2.1e-4 CPU / 2.9e-4 CUDA vs
+fp32, cos ~1.0) — never int8/int4 (quant shifts the vector space,
+needs retrieval re-eval, not parity).
 
 ## 6. Parity methodology (tolerances are per-family)
 
