@@ -14,7 +14,7 @@ the design decisions and measurements behind it.
 | `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`), embedding registry (`ModelSpec`) + task registry (`TaskSpec`: rerank/decide), registration overlay |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
 | `diag` | runtime inventory — `ORT_DYLIB_PATH` value, venv installs, CUDA DLLs, usability probe (`runtime_info`, `prepare_cuda_dirs`, `save_runtime_info`, `configure_runtime`) |
-| `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
+| `jina` | `JinaV5` + `TokenizerHandle` (Python `Tokenizer`) — the frozen embedding contract; the handle serves every tokenizer (Jina, Gemma — verified byte-identical), never just Jina |
 | `vision` | `JinaV5Vision` — dynamic-grid vision into text-nano space |
 | `gemma` | `GemmaVision` — vision tower + text-tower fusion into Gemma space |
 | `rerank` | `Reranker` — cross-encoder scoring (pair seam + `score_long` windowing) |
@@ -150,7 +150,9 @@ pooling → L2 → Matryoshka truncate → re-normalise.
   attention compute on variable-length docs). The GIL is released
   during encode. A failed `open()` is cached and re-raised — config
   errors fail fast once. `count_tokens()` reports true length through a
-  truncation-free handle (shared helper with JinaV5); internal tokenize
+  truncation-free handle (shared helper with JinaV5; Python `Tokenizer`,
+  formerly `JinaTokenizer` — the old name still resolves with a
+  `DeprecationWarning`); internal tokenize
   matches `tokenizer.encode(t, add_special_tokens=False)` — no
   transformers anywhere in the runtime path.
 - **Vision slots** run one image per call (`seq = patches/4 + 15`,
