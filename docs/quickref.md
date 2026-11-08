@@ -342,7 +342,7 @@ deciding garbage. Multi-label sigmoids run systematically over-confident
 ## Tokenizer-only counts (Python)
 
 ```python
-from embroider import Tokenizer   # JinaTokenizer still resolves, deprecated
+from embroider import Tokenizer   # 0.14.1+; JinaTokenizer still resolves, deprecated
 
 t = Tokenizer.open("jinaai/jina-embeddings-v5-text-small-retrieval")
 t = Tokenizer.open("google/embeddinggemma-2")   # any tokenizer, not just Jina

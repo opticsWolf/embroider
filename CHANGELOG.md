@@ -3,7 +3,17 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [0.14.1] — 2026-11-08
+
+### Added
+- General `Tokenizer` loader (`embroider.Tokenizer`, same `open` /
+  `open_files` / `count_tokens` seam): the handle was never Jina-specific
+  — it serves Gemma tokenizers too (verified byte-identical to the
+  export's). `JinaTokenizer` still resolves, with a `DeprecationWarning`
+  pointing at the new name; remove in a later minor once consumers
+  migrate.
+
+## [0.14.0] — 2026-11-07
 
 ### Fixed
 - Flaky `prepare_cuda_dirs_prepends_nvidia_pip_bin_dirs`: the sibling
@@ -17,8 +27,6 @@ All notable changes to `embroider` are documented here. Format follows
   `docs/ARCHITECTURE.md` the design record; the rerank/decide plans are
   combined into `docs/rerank-typed-decision-record.md` and the registry
   draft renamed to `docs/model-registry-record.md`. No behavior change.
-
-## [0.14.0] — 2026-11-07
 
 ### Added
 - **EmbeddingGemma 2 vision slot (`GemmaVision`, Python `GemmaVision`).**
@@ -40,13 +48,6 @@ All notable changes to `embroider` are documented here. Format follows
   Pillow bicubic resize; `truncate_dim` / `device` / `precision` /
   `gpu_mem_limit` like the Jina slot. Registry carries the entry with its
   fp32 + fp16 tiers and `text_partner`; `available_models()` lists it.
-
-- General `Tokenizer` loader (`embroider.Tokenizer`, same `open` /
-  `open_files` / `count_tokens` seam): the handle was never Jina-specific
-  — it serves Gemma tokenizers too (verified byte-identical to the
-  export's). `JinaTokenizer` still resolves, with a `DeprecationWarning`
-  pointing at the new name; remove in a later minor once consumers
-  migrate.
   Fixtures under `fixtures/gemmavision/`, ignored
   `tests/gemma_vision_e2e.rs`.
 
