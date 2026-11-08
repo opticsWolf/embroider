@@ -5,14 +5,6 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
-### Added
-- General `Tokenizer` loader (`embroider.Tokenizer`, same `open` /
-  `open_files` / `count_tokens` seam): the handle was never Jina-specific
-  — it serves Gemma tokenizers too (verified byte-identical to the
-  export's). `JinaTokenizer` still resolves, with a `DeprecationWarning`
-  pointing at the new name; remove in a later minor once consumers
-  migrate.
-
 ### Fixed
 - Flaky `prepare_cuda_dirs_prepends_nvidia_pip_bin_dirs`: the sibling
   venv-dylib test touched `PATH`/`ORT_DYLIB_PATH` without holding the
@@ -48,6 +40,13 @@ All notable changes to `embroider` are documented here. Format follows
   Pillow bicubic resize; `truncate_dim` / `device` / `precision` /
   `gpu_mem_limit` like the Jina slot. Registry carries the entry with its
   fp32 + fp16 tiers and `text_partner`; `available_models()` lists it.
+
+- General `Tokenizer` loader (`embroider.Tokenizer`, same `open` /
+  `open_files` / `count_tokens` seam): the handle was never Jina-specific
+  — it serves Gemma tokenizers too (verified byte-identical to the
+  export's). `JinaTokenizer` still resolves, with a `DeprecationWarning`
+  pointing at the new name; remove in a later minor once consumers
+  migrate.
   Fixtures under `fixtures/gemmavision/`, ignored
   `tests/gemma_vision_e2e.rs`.
 
