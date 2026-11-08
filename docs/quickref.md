@@ -1,6 +1,6 @@
 # embroider — Quick Reference
 
-Copy-paste surface. Design rationale lives in `architecture.md`, release matrix in
+Copy-paste surface. Design rationale lives in `ARCHITECTURE.md`, release matrix in
 [compat.md](compat.md).
 
 ## Install

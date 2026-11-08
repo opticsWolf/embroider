@@ -73,7 +73,7 @@ v = m.encode("what do badgers eat?", task="query")   # 512-d unit vector, golden
 
 - [docs/quickref.md](docs/quickref.md) — the complete user manual:
   every loader, every parameter, copy-paste Python and Rust.
-- [docs/architecture.md](docs/architecture.md) — how it works: module
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how it works: module
   layout, session policy and measurements, runtime discovery, the
   frozen-contract rules, registry and precision design, conformance.
 - [docs/compat.md](docs/compat.md) — release matrix, model sizes and
