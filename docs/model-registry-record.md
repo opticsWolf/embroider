@@ -1,4 +1,4 @@
-# Model registry surface — draft
+# Model registry surface — record
 
 Status: **shipped in 0.12.0** (layer 1 + revision pins; layer 2 deferred as designed). **Status 2026-11-07:** verified against the tree — every element below is in `src/acquire.rs` / `src/lib.rs` with unit cover, including the revision-completeness test (every builtin fp32 pinned) and the overlay-aware `resolve_model` path shared by all loaders (Jina text/vision, Gemma text/vision, rerank, decide, Laya, Decider-2B). Layer 2 (`TaskLoader`) still absent by design. The problem statement below is the pre-0.12.0 record, kept verbatim. Problem: every model is a
 `pub const` in `src/acquire.rs` (`TEXT_SMALL`, `RERANK_MINILM`,

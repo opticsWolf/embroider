@@ -104,7 +104,7 @@ New models under known kinds need no source change (`register_task` /
 the file form — `{"registry_version": 1, "tasks": [...],
 "models": [...]}`). Kinds are the existing ones (`rerank`,
 `decide`, `decide-laya`, `decide-2b`, `embed`); a new input contract
-still needs a Rust loader (see `docs/model-registry-draft.md`
+still needs a Rust loader (see `docs/model-registry-record.md`
 layer 2). Rules: ids must be `owner/name`, builtin ids and
 duplicates are refused loudly (mirrors take their own ids), unlisted
 precision tiers fall back to fp32, and caller-supplied non-fp32 tiers

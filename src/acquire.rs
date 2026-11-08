@@ -277,7 +277,7 @@ impl TaskKind {
             other => Err(anyhow!(
                 "unknown task kind '{other}': expected 'rerank', 'decide', \
                  'decide-laya' or 'decide-2b' — a new input contract needs a \
-                 Rust loader (see docs/model-registry-draft.md layer 2), not a registry row"
+                 Rust loader (see docs/model-registry-record.md layer 2), not a registry row"
             )),
         }
     }

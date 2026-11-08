@@ -1362,7 +1362,7 @@ fn provenance_from_py(v: &pyo3::Bound<pyo3::types::PyAny>) -> PyResult<acquire::
 }
 
 /// Register a task model under an existing kind (see
-/// `docs/model-registry-draft.md` layer 1): `kind` is one of
+/// `docs/model-registry-record.md` layer 1): `kind` is one of
 /// 'rerank' / 'decide' / 'decide-laya' / 'decide-2b'; `fp32` is
 /// required, `fp16` / `int8` / `q8` are optional tiers;
 /// `extra_files` extends the kind defaults (never shrinks — e.g.
