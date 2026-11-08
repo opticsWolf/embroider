@@ -74,7 +74,12 @@ listed in `runtime_info()["load_dirs"]`.
 
 `ORT_DYLIB_PATH` is first-touch: the dylib binds on first `open()`
 (the probe counts), so set it before anything opens a session — even
-`runtime_info()`'s probe counts as a first touch.
+`runtime_info()`'s probe counts as a first touch. The venv scan follows
+`VIRTUAL_ENV` with a `sys.prefix` fallback (unset = installs unknown, the
+probe fields still report); duplicate spellings of one venv (`Lib/` vs
+`lib/`) list once. Report keys are stable (`ort_dylib`,
+`ort_dylib_exists`, `sibling_provider_dlls`, `cuda_usable`,
+`ort_installs`, `cuda_runtime_dlls`, `load_dirs`, `virtual_env`).
 
 **Pitfall: stale `onnxruntime.dll` on Windows.** Windows boxes can carry
 a stale `C:\Windows\System32\onnxruntime.dll` (v1.17.1 in the wild). With
@@ -129,23 +134,34 @@ pooling → L2 → Matryoshka truncate → re-normalise.
   uses mean pooling with Gemma prompts (`task: search result | query:`
   / `title: none | text:`). Swapped prefixes silently fork the space.
 - **Session IO is discovered at load.** `input_ids` + `attention_mask`
-  required; `token_type_ids` fed only if declared (v5's export doesn't
-  declare it — where generic runners fail). Embedding output prefers
-  `last_hidden_state`; rerank reads `logits`.
+  (int64) required; `token_type_ids` fed only if declared (v5's export
+  doesn't declare it — where generic runners fail). Embedding output
+  prefers `last_hidden_state`; rerank reads `logits` (`[B,1]`).
 - **Pooling takes the last attended token** (`mask_sum - 1`, clamped
-  ≥ 0); `input_ids`/`attention_mask` feed as int64.
+  ≥ 0).
 - **`truncate_dim`** validated 32–1024 with a warning off the
   Matryoshka ladder (nano tops at 768). **`max_length`** validated
-  1..=32768 (`None` = 8192 compat default); same (text, `max_length`)
-  → same vector, short inputs bit-identical at any limit. A 32K-token
-  forward is O(n²) memory — size the limit to the machine.
+  1..=32768 (`None` = 8192 compat default; `MAX_LENGTH` /
+  `MODEL_MAX_TOKENS` are exposed for the caller's window guard).
+  Same (text, `max_length`) → same vector; short inputs are bit-identical
+  at any limit, while longer inputs change once the old truncation lifts.
+  A 32K-token forward is O(n²) memory — size the limit to the machine.
 - **Batch encoding is sequential by design** (padded batches waste
   attention compute on variable-length docs). The GIL is released
   during encode. A failed `open()` is cached and re-raised — config
-  errors fail fast once.
-- **Vision slots** run one image per call. Jina: dynamic-grid graph,
-  six inputs, host-computed grid tensors bit-identical to transformers
-  (fixture-pinned), every encode re-checks `seq == image_tokens + 15`.
+  errors fail fast once. `count_tokens()` reports true length through a
+  truncation-free handle (shared helper with JinaV5); internal tokenize
+  matches `tokenizer.encode(t, add_special_tokens=False)` — no
+  transformers anywhere in the runtime path.
+- **Vision slots** run one image per call (`seq = patches/4 + 15`,
+  ≤1295 tokens). Jina: dynamic-grid graph, six inputs
+  (`input_ids`/`attention_mask` int64, `pixel_values` float32,
+  `vision_pos_ids`/`interp_indices` int64, `interp_weights` float32),
+  host-computed grid tensors bit-identical to transformers
+  (fixture-pinned); output `sentence_embedding` float32 `[1,768]`, then
+  the same L2 → truncate → re-normalise as text. Every encode re-checks
+  `seq == image_tokens + 15`, so a wrong tokenizer fails loudly instead
+  of shifting the space.
   Gemma: vision tower (`pixel_values` + `pixel_position_ids` in,
   `image_features` out) fused through the text tower with framing ids
   and the native `sentence_embedding` head; host math ports the
@@ -154,11 +170,40 @@ pooling → L2 → Matryoshka truncate → re-normalise.
   error in both slots — the Jina graph stalls, the Gemma tower NaNs.
 - **Decide slots** truncate state-side-first in both label layouts
   (text-first small-v1.0, labels-first v4-edge); options are the
-  question and are never cut. Laya collates marker columns to
-  `max(kmax, 2)` (the exported head takes `topk(2)`); decode is
-  `logits/t → softmax → unpermute → per-type shape` in float64, cast
-  at the boundary; fitted per-bucket temperatures clamp to [0.5, 5.0]
-  with queryable rejections.
+  question and are never cut. Concatenation is manual id stitching, not
+  the pair-tokenizer `OnlySecond` pattern — which would cut the wrong
+  side. Laya collates marker columns to `max(kmax, 2)` (the exported
+  head takes `topk(2)`); decode is `logits/t → softmax → unpermute →
+  per-type shape` in float64, cast at the boundary; fitted per-bucket
+  temperatures clamp to [0.5, 5.0] with queryable rejections.
+  `option_order` must be an exact permutation — a silent misindex would
+  attach probabilities to the wrong options.
+
+## Engine serving notes
+
+- **Rerank.** `score_long` slides windows (default: session cap, 50%-
+  overlap steps) with MaxP aggregation; chunk planning is pure and
+  weight-free unit-tested, and single-window inputs score exactly like
+  `score_one` (e2e-pinned ≤1e-6). CUDA is opportunistic (~1.5x at batch,
+  worse at b1 — short forwards are overhead-bound).
+- **Decide.** `Choice` is single-label softmax; `Score` is multi-label
+  sigmoid, native and unthresholded. `Noul` is declared but
+  loud-unsupported on GLiClass graphs. Temperature is identity — the
+  calibration lives in the v4 graph, not the port.
+- **Laya.** `predict_long` scans states past the cap: token windows
+  (default `max(64, max_len - head_max_len - 8)` — the checkpoint's own
+  state budget — clamped to the room the questions leave, 50%-overlap
+  steps), one shared session run for all windows, per-type aggregation
+  (noul: strongest P(true); choice/score: most-confident window). It
+  returns the deciding window's decision plus its token span — that
+  window's numbers, not calibrated document numbers. A `BinningMap`
+  overlay remaps `answer_confidence` for fitted buckets; no checkpoint
+  ships one.
+- **Decider-2B.** Lettered choices (`(A) …`, one label token each past
+  10 options) with a trailing `Answer: (` slot scored over the 255
+  label ids; score questions become one yes/no row per level (isolated
+  fit). Noul carries BOTH criteria (`yes:` / `no:`). CPU is slow-tier
+  (~1.5–2 s/row); CUDA runs the parallel executor (see above).
 
 ## Registry and precision design
 
@@ -187,20 +232,73 @@ parity-gated.
 
 ## Conformance and testing philosophy
 
-Goldens are the contract proof: `fixtures/golden_jina_v5_text_small.json`
-pins the vector space (4 texts × Query/Document × dims 64/512 +
-token counts, `abs=1e-6` — catches wrong model, pooling, prefix, or
-truncation, immune to cross-CPU noise); vision host math is pinned
-bitwise under `fixtures/vision/`; every engine ships fixture + ignored
-env-gated e2e (`tests/*_e2e.rs`, no weight downloads in CI). Regenerate
-only on an intentional contract change — which is a new minor version
-plus a re-index-everything notice. Releases are immutable: the tag must
+Goldens are the contract proof. The fixture inventory:
+
+- `fixtures/golden_jina_v5_text_small.json` — 12 vectors (4 texts ×
+  Query/Document × dims 64/512) + exact token counts, generated with
+  embroider 0.1.3 / onnxruntime 1.29.0 CPU, byte-identical green on
+  1.31.1. Unchanged by 0.1.4 (`max_length`) and 0.1.5 (`precision`,
+  `cpu_arena`) for short inputs at defaults. Assert live vectors at
+  `abs=1e-6`.
+- `fixtures/vision/` — `target_sizes.json`, `host_tensors.json`,
+  `pixel_cases.json` (from the spike's verified `grid.py`); the Rust
+  port asserts bitwise equality on all 31 grids and the pixel pipeline
+  on 3 cases. `fixtures/vision/e2e/` (5 real figures + torch goldens)
+  backs the ignored end-to-end parity test (cos ≥ 0.9999 fp32 /
+  ≥ 0.999 fp16).
+- `fixtures/golden_rerank_{minilm,mmarco}.json` — torch parity
+  2.9e-6/7.7e-6 at pinned revisions; re-recorded from 1.29.0 at 0.13.0
+  (max drift 2.9e-6). The ignored e2e asserts goldens plus
+  per-language relevant-beats-irrelevant, single-window equivalence,
+  MaxP sanity, and validation order.
+- `fixtures/golden_decide_gliclass_{small,v4edge}.json` — small abs
+  1e-6, v4 abs 0.03 (the embedded calibrator accumulates kernel-order
+  drift); exact-match labels; B0 torch probes exact (small) / Δ 0.028
+  (v4). The ignored e2e asserts goldens plus the layout proof per
+  recipe.
+- `fixtures/golden_laya_td.json` — agent-built rows + raw float64
+  reference decode, 7 cases incl. permutation, solo, and relevance
+  probes; ignored e2e asserts exact input-id + marker equality and 1e-6
+  on every number.
+- `fixtures/golden_decider2b.json` — 8 cases incl. the 12-option wide
+  path and a mixed multi batch; exact input ids and 5e-4 answers on CPU
+  *and* CUDA (the CUDA leg gates the executor switch).
+- `fixtures/gemmavision/` — sentence-transformers references for 3
+  figures; ignored e2e asserts cos = 1.0 fp32 CPU/CUDA and fp16 CUDA
+  plus a cross-modal rank pin.
+
+Regenerate only on an intentional contract change — which is a new minor version
+plus a re-index-everything notice. ## Consumers
+
+- **okfgraph** holds a lazy proxy: construction validates the wheel
+  import and device string eagerly, but the session opens on the first
+  real encode — PPR search, budgeted reads, diff, and doctor stay cold.
+  It vendors the goldens and asserts live vectors (`test_parity.py`),
+  reports cache state through `model_info()` (over `cache_info`), and
+  routes local files through `OKFRouter(model_path=..., tokenizer_path=...)`
+  (both or neither; missing files raise `FileNotFoundError`).
+- **bobine** builds its own converter-model sessions from
+  `SessionPolicy::ort_defaults()` + `apply_providers` + `cuda_available()`
+  + `report()` — never touching the loaders — and reports cache state
+  through `cache_info_files` (its `model_status()`). Sharing runtime
+  policy never means sharing one inference session.
+
+Releases are immutable: the tag must
 equal both version files, and `embroider` publishes before consumers
 move their pins.
 
 Rust unit tests (111, pure — no network, no dylib, no tokenizer file)
-cover parsing, resolution, registry validation (including the revision
-completeness test), the truncation/normalisation math, contract
-constants, validation-before-IO, and offline cache inspection. Python
+cover device/precision parsing, precision-follows-device resolution,
+FP16-mirror selection, model-id parsing, the provider matrix, task-prefix
+idempotence, the L2 → truncate → re-normalise math, contract constants,
+`open()`/`open_files()` validation firing before I/O (dims, `max_length`),
+offline cache inspection (registry artifact resolution, fake-cache
+hit/partial/full miss, `auto`/bad-id refusal; the Gemma entry incl.
+contract, fp32/fp16 artifacts, mirror revision, prompt/mean-pool
+selection; generic `cache_info_files` required/optional semantics, pinned
+revision, delegation parity), the vision registry entry, the resize
+contract (incl. banker's rounding and aspect rejection), host tensors
+bit-identical on all 31 grids, the pixel pipeline bit-identical on 3
+cases, and the vision fp16-on-CPU refusal. Python
 parity lives with okfgraph (`tests/test_parity.py`, slow): Rust output
 against a numpy/transformers replication at ≤ 1e-5.
