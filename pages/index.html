@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b0a13">
-  <title>embroider — frozen embeddings (Jina v5 + Gemma 2) over ONNX Runtime</title>
-  <meta name="description" content="Text and image embeddings (Jina v5, EmbeddingGemma 2) served through ONNX Runtime from a Rust core, with Python bindings. One frozen vector-space contract per model, shared session policy, no torch in the hot path.">
+  <title>embroider — frozen embedding, rerank, and decision vectors over ONNX Runtime</title>
+  <meta name="description" content="Text and image embeddings (Jina v5, EmbeddingGemma 2) served through ONNX Runtime from a Rust core, with Python bindings. One frozen contract per model (embed, rerank, decide), shared session policy, no torch in the hot path.">
   <link rel="preload" href="fonts/space-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css?v=embroider-15">
 </head>
@@ -218,7 +218,7 @@ let cuda = embroider::cuda_available();</code></pre></div>
 </section>
 
 <section id="surfaces" aria-labelledby="surfaces-title">
-  <div class="section-intro"><h2 id="surfaces-title">One engine.<br>Two languages.</h2><div class="prose"><p>Python covers the Jina contract end to end; Rust exposes the same engine plus the session-policy API other models build on. The pure-Rust crate builds without Python — the <code>extension-module</code> Cargo feature gates PyO3 and is enabled only for wheel builds, the same pattern bobine uses.</p></div></div>
+  <div class="section-intro"><h2 id="surfaces-title">One engine.<br>Two languages.</h2><div class="prose"><p>Python covers the engines end to end; Rust exposes the same engine plus the session-policy API other models build on. The <a href="https://github.com/opticsWolf/embroider/blob/main/docs/ARCHITECTURE.md">architecture record</a> explains how the pieces fit. The pure-Rust crate builds without Python — the <code>extension-module</code> Cargo feature gates PyO3 and is enabled only for wheel builds, the same pattern bobine uses.</p></div></div>
   <div class="doors">
     <article><h3>Python for embeddings</h3><p>Open lazily, encode with a task, introspect the landing. Docs live beside the code: quick reference for copy-paste, compatibility matrix for the release story.</p><pre tabindex="0" aria-label="Python example"><code>from embroider import JinaV5
 

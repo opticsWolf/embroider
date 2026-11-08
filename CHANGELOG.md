@@ -3,6 +3,21 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Fixed
+- Flaky `prepare_cuda_dirs_prepends_nvidia_pip_bin_dirs`: the sibling
+  venv-dylib test touched `PATH`/`ORT_DYLIB_PATH` without holding the
+  shared env lock, so parallel test threads could clobber each other
+  mid-flight. It now serializes like the other env-touching tests.
+
+### Changed
+- Docs reorganization: `README.md` thinned to an index (engines, install,
+  failure policy), `docs/quickref.md` is now the complete user manual,
+  `docs/ARCHITECTURE.md` the design record; the rerank/decide plans are
+  combined into `docs/rerank-typed-decision-record.md` and the registry
+  draft renamed to `docs/model-registry-record.md`. No behavior change.
+
 ## [0.14.0] — 2026-11-07
 
 ### Added
