@@ -9,7 +9,7 @@ proof — okfgraph's suite asserts live vectors against them.
 |---|---|---|---|---|
 | 0.7.x | 0.5.x+ | 0.2.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.8.x | 0.5.x+ | 0.3.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
-| 0.11.x + pin bump (unreleased) | 0.6.x+ | 0.13.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.11.x + pin bump (unreleased) | 0.6.x+ | 0.14.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
 
 Rules:
 

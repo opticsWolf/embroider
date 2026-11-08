@@ -185,7 +185,7 @@ with the consumer by design.
 always wins), else the pip-installed `onnxruntime`/`onnxruntime-gpu`
 build when unset. okfgraph's `resolve_ort_dylib()` runs before the native
 module is imported, so bobine and embroider share **one** ORT binary — no
-version/CUDA drift between ingest and import. Since 0.13.1 the loader
+version/CUDA drift between ingest and import. Since 0.14.0 the loader
 path is self-servicing (see [Runtime inventory](#runtime-inventory-which-dylib-which-cuda)):
 before the first CUDA session, `embroider` prepends the venv's NVIDIA
 wheel directories, the `onnxruntime` capi dirs, and the system CUDA/cuDNN
@@ -511,7 +511,7 @@ info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
 save_runtime_info("bench/run-001/runtime.json")
 
 from embroider import prepare_cuda_runtime
-prepare_cuda_runtime()   # 0.13.1+: idempotent, never throws; the same
+prepare_cuda_runtime()   # 0.14.0+: idempotent, never throws; the same
                          # PATH prep every CUDA open already runs itself
 ```
 
@@ -526,7 +526,7 @@ makes `cudnn64_9.dll` resolve out of site-packages for cuDNN-backed
 ops like GLiClass's `ReduceMax`). Returns the post-call report. The
 venv scan follows `VIRTUAL_ENV` with a `sys.prefix` fallback, so a
 non-activated interpreter still sees its own installs. `prepare_cuda_runtime()`
-(0.13.1) runs the same directory collection `open()` already performs
+(0.14.0) runs the same directory collection `open()` already performs
 before the first CUDA session — call it directly for parity checks or
 surface tests; CPU-only requests skip it, and it never throws.
 

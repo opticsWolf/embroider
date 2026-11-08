@@ -3,7 +3,7 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [0.14.0] — 2026-11-07
 
 ### Added
 - **EmbeddingGemma 2 vision slot (`GemmaVision`, Python `GemmaVision`).**
@@ -21,10 +21,7 @@ All notable changes to `embroider` are documented here. Format follows
   `google/embeddinggemma-2` text space. Fixtures under
   `fixtures/gemmavision/`, ignored `tests/gemma_vision_e2e.rs`.
 
-## [0.13.1] — 2026-11-07
-
-### Added
-- **CUDA DLL self-service (0.13.1).** A freshly spawned process used to
+- **CUDA DLL self-service.** A freshly spawned process used to
   be at the mercy of ambient PATH when an embed session landed on CUDA:
   with ORT 1.31.1 the CUDA EP requires `cudnn64_9.dll` (and friends),
   which pip ships in the venv's `nvidia/cudnn`, `nvidia/cu13`, … dists

@@ -10,7 +10,7 @@ pip install embroider
 ```
 
 ```rust
-embroider = "0.13"  // shared ORT plumbing; embedding (Jina v5 + Gemma 2) + rerank/decide engines included
+embroider = "0.14"  // shared ORT plumbing; embedding (Jina v5 + Gemma 2) + rerank/decide engines included
 ```
 
 Needs exactly one ONNX Runtime: `onnxruntime==1.31.1` (or
@@ -20,7 +20,7 @@ Needs exactly one ONNX Runtime: `onnxruntime==1.31.1` (or
 export ORT_DYLIB_PATH=/path/to/onnxruntime.dll   # e.g. <venv>/Lib/site-packages/onnxruntime/capi/onnxruntime.dll
 
 from embroider import prepare_cuda_runtime
-prepare_cuda_runtime()   # 0.13.1+: self-service CUDA loader PATH (venv
+prepare_cuda_runtime()   # 0.14.0+: self-service CUDA loader PATH (venv
                          # nvidia dists + capi dirs + SDK roots), idempotent;
                          # every CUDA open already runs this itself
 ```
@@ -288,7 +288,7 @@ let policy = embroider::SessionPolicy::text_embed();
 // environment diagnostics
 let rep = embroider::report();   // dylib path + CUDA usable?
 let cuda = embroider::cuda_available();   // OnceLock-cached EP check, not a registration probe
-let _dirs = embroider::prepare_cuda_dirs();   // 0.13.1+: PATH prep every CUDA open runs itself; idempotent
+let _dirs = embroider::prepare_cuda_dirs();   // 0.14.0+: PATH prep every CUDA open runs itself; idempotent
 let (owner, name) = embroider::parse_owner_name("org/repo")?;
 
 // request parsing (same strings as the Python kwargs)
