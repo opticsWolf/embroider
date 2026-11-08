@@ -48,9 +48,10 @@
       <pre tabindex="0" aria-label="Illustrative embedding session"><code><span class="syntax-key">from</span> embroider <span class="syntax-key">import</span> JinaV5
 
 m = JinaV5.<span class="syntax-link">open</span>(
-  <span class="syntax-muted">"jinaai/jina-embeddings-v5-text-small-retrieval"</span>)
+  <span class="syntax-muted">"google/embeddinggemma-2"</span>,
+  truncate_dim=<span class="syntax-muted">768</span>)
 v = m.<span class="syntax-link">encode</span>(<span class="syntax-muted">"what do badgers eat?"</span>, task=<span class="syntax-muted">"query"</span>)
-<span class="syntax-muted"># → 512-dim unit vector, golden-pinned</span></code></pre>
+<span class="syntax-muted"># → 768-dim unit vector, golden-pinned</span></code></pre>
     </div>
     <div class="preview-index"><span>Load once, encode often</span><span>prefix · pool · truncate · norm</span></div>
     <div class="preview-query"><span class="syntax-muted">The rule downstream indexes rely on</span><strong>“Never mix what you can't compare.”</strong><p>Same model, precision, tuning, and length — or re-embed.<br>Anything else raises instead of drifting.</p></div>
