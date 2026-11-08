@@ -9,668 +9,80 @@
 [![License](https://img.shields.io/crates/l/embroider)](LICENSE-MIT)
 [![Website](https://img.shields.io/badge/website-embroider-blue)](https://opticswolf.github.io/embroider/)
 
-## Contents
-
-- [What it is](#what-it-is)
-- [Models](#models) — registry, precisions, custom repos, licences
-- [Install](#install)
-- [Module layout](#module-layout)
-- [Using embroider without Jina](#using-embroider-without-jina) — session-policy recipe for other models
-- [Runtime: ONNX Runtime discovery](#runtime-onnx-runtime-discovery)
-- [Text embeddings](#text-embeddings)
-- [Vision embeddings](#vision-embeddings)
-- [Rerank](#rerank) — cross-encoder pair scoring (`Reranker`, 0.4.x)
-- [Decide](#decide) — typed decisions (`Decider`, 0.5.x) · [Laya](#laya) — marker layout (`LayaDecider`, 0.7.x) · [Decider-2B](#decider-2b) — slot layout (`Decider2B`, 0.10.x)
-- [Running without downloads](#running-without-downloads) — tokenizer counts, offline cache checks, local files
-- [Session/threading policy](#sessionthreading-policy-measured)
-- [Failure policy](#failure-policy) · [Contract notes](#contract-notes) · [Conformance](#conformance) · [Testing](#testing)
-- [Quick reference](docs/quickref.md) — copy-paste Python/Rust surface
-
 ## What it is
 
-`embroider` turns text — and images — into vectors: embeddings served
-through ONNX Runtime from a Rust core, with optional PyO3 bindings for
-Python. Two embedding families live in the registry: Jina v5
-(non-commercial weights) and EmbeddingGemma 2 (Apache-2.0, Google weights
-via the `onnx-community` export plus a self-published FP16 mirror) — same
-pipeline, different pooling and prompts per model (see [Models](#models)).
-Since 0.4.x it also scores them: cross-encoder rerankers
-(`Reranker`) reorder retrieval candidates with pair-encoded logits from
-the same runtime — no second engine, no torch anywhere in the chain.
+`embroider` turns text — and images — into vectors, scores, and typed
+decisions: embeddings, cross-encoder rerank, and Choice/Score/Noul
+gates served through ONNX Runtime from a Rust core, with optional PyO3
+bindings. Two embedding families live in the registry — Jina v5
+(non-commercial) and EmbeddingGemma 2 (Apache-2.0) — alongside
+rerankers, GLiClass deciders, Laya marker-layout gates, and the
+Decider-2B slot engine. No torch, transformers, or optimum in the hot
+path, so every vector in an index stays directly comparable — or the
+encode fails loudly instead of silently forking the space.
 
-### One frozen contract (per model)
+Two consumers share it differently: **okfgraph** uses the text +
+vision contracts for its graph; **bobine** (PDF/Office → Markdown)
+reuses only the ONNX plumbing — session policy, provider fallback,
+CUDA probe — while owning its converter-model sessions.
 
-Task prefix → tokenize → ONNX forward → pooling → L2 →
-Matryoshka truncate → re-normalise. Jina ids use last-token pooling with
-`Query:`/`Document:` prefixes; `google/embeddinggemma-2` uses mean pooling
-with Gemma prompts (`task: search result | query:` / `title: none | text:`).
-Every consumer lands in the same vector space per model, or gets a loud
-error instead of a silent fork.
+## Engines
 
-### Two consumers
+| Capability | Loader (Python / Rust) | Registry ids |
+|---|---|---|
+| Text embeddings (Jina v5, Gemma 2) | `JinaV5` / `jina` | `jinaai/jina-embeddings-v5-*`, `google/embeddinggemma-2` |
+| Vision → text space (Jina, Gemma) | `JinaV5Vision`, `GemmaVision` / `vision`, `gemma` | `jina-v5-omni-nano-retrieval-vision`, `google/embeddinggemma-2-vision` |
+| Cross-encoder rerank | `Reranker` / `rerank` | `cross-encoder/ms-marco-MiniLM-L-6-v2`, `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` |
+| Typed decisions (GLiClass) | `Decider` / `decide` | `knowledgator/gliclass-small-v1.0`, `knowledgator/gliclass-v4-edge` |
+| Typed decisions (Laya markers) | `LayaDecider` / `laya` | `convaiinnovations/laya-{typed-decisions,english,multilingual}` |
+| Typed decisions (decider-2B slots) | `Decider2B` / `decider2b` | `Mapika/decider-2b` |
+| Custom models under known kinds | `register_task` / `register_model`, `load_registry_file` | caller-supplied `owner/name` ids |
 
-**okfgraph** uses the full Jina v5 text + vision contract.
-**bobine** (PDF/Office → Markdown) reuses the ONNX plumbing — session
-policy, provider fallback, CUDA probe — while owning its own
-converter-model sessions (RapidOCR, layout, tables, formulas).
-
-### One backend
-
-No torch / transformers / optimum in the hot path, so every vector in an
-index stays directly comparable. If something can't be embedded exactly
-to contract, embroider errors loudly rather than quietly mixing vector
-spaces.
-
-## Models
-
-Four blessed embedding entries (`src/acquire.rs`) — Jina weights are
-non-commercial, EmbeddingGemma 2 is Apache-2.0 (licences tabled in [docs/compat.md](docs/compat.md)). Download
-bytes, per-model latencies and CPU-vs-CUDA guidance live in the
-[Model sizes & serving](docs/compat.md#model-sizes--serving) table —
-read it before choosing what a consumer downloads:
-
-| Registry id | Artifact repo | Precisions | Used for |
-|---|---|---|---|
-| `jinaai/jina-embeddings-v5-text-small-retrieval` (default) | itself (fp32) + `opticsWolf/…-onnx-fp16` mirror (fp16) | fp32, fp16 | General text graphs |
-| `jinaai/jina-embeddings-v5-text-nano-retrieval` | itself (in-repo fp32 + fp16 + int8) | fp32, fp16, int8 | Compact graphs; **required text partner** for vision |
-| `jina-v5-omni-nano-retrieval-vision` | `opticsWolf/jina-embeddings-v5-omni-nano-retrieval-onnx` | fp32, fp16 | Image bytes → text-nano space (`text_partner` pinned) |
-| `google/embeddinggemma-2` | itself (`onnx/model.onnx`) + `opticsWolf/embeddinggemma-2-onnx-fp16` mirror (`onnx/model.onnx` / fp16 `onnx/model_fp16.onnx`) | fp32, fp16 | Permissive text graphs (Apache-2.0); mean pooling + Gemma prompts, MRL 128/256/512/768 |
-
-Plus the task registry (`TaskSpec`, same file) — rerankers, which have
-no vector space and take no `truncate_dim`. The first entries are
-Apache-2.0, the registry's first commercially-usable weights:
-
-| Registry id | Artifact repo | Precisions | Used for |
-|---|---|---|---|
-| `cross-encoder/ms-marco-MiniLM-L-6-v2` | itself (`onnx/model.onnx`) + `opticsWolf/ms-marco-MiniLM-L-6-v2-q8-onnx` | fp32, q8 | Rerank, English |
-| `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | itself (`onnx/model.onnx`) + `opticsWolf/mmarco-mMiniLMv2-L12-H384-v1-q8-onnx` | fp32, q8 | Rerank, multilingual (100+ langs) |
-| `knowledgator/gliclass-small-v1.0` | itself (`onnx/model.onnx`) | fp32 | Typed decisions (Choice/Score), 144M |
-| `knowledgator/gliclass-v4-edge` | itself (`onnx/model.onnx`) + `opticsWolf/gliclass-v4-edge-q8-onnx` | fp32, q8 | Typed decisions + instruction prompts, labels-first, 440M |
-| `convaiinnovations/laya-typed-decisions` | `opticsWolf/laya-typed-decisions-fp32-onnx` | fp32, q8 | Typed decisions, marker layout, fitted temps |
-
-### Custom models
-
-Unknown ids fall through to the legacy path: the id itself is treated as
-an HF repo holding `onnx/model.onnx` (`lookup_model` → `None`,
-`artifact_for` default layout). Any downstream consumer can point
-embroider at a compatible repo with no registry change. Fully local
-weights skip acquisition entirely — see
-[Running without downloads](#running-without-downloads).
-
-### Registering models
-
-New models under known kinds need no source change (`register_task` /
-`register_model`, or `load_registry_file("models/extra.json")` for
-the file form — `{"registry_version": 1, "tasks": [...],
-"models": [...]}`). Kinds are the existing ones (`rerank`,
-`decide`, `decide-laya`, `decide-2b`, `embed`); a new input contract
-still needs a Rust loader (see `docs/model-registry-record.md`
-layer 2). Rules: ids must be `owner/name`, builtin ids and
-duplicates are refused loudly (mirrors take their own ids), unlisted
-precision tiers fall back to fp32, and caller-supplied non-fp32 tiers
-run flagged-unmeasured (`available_models` shows `source` /
-`measured`; `open()` at such a tier warns with the entry's
-`registered_from` attribution — the drift is the caller's gate).
-`export_registry()` dumps the overlay for round-tripping.
-`probe=True` runs an offline `cache_info` after registering and
-reports what `open()` would need.
+Full artifact repos, precisions, and licences per entry live in
+[docs/compat.md](docs/compat.md); the registry design (builtin +
+overlay, flagged-unmeasured tiers, revision pins) in
+[docs/model-registry-record.md](docs/model-registry-record.md).
 
 ## Install
 
-PyPI wheels (Linux / Windows / macOS-arm64, Python 3.11–3.13) — `okfgraph`
-pulls it in automatically; standalone:
-
 ```bash
-pip install embroider
+pip install embroider                       # Linux / Windows / macOS-arm64, Python 3.11–3.13
+pip install onnxruntime==1.31.1             # or -gpu[cuda,cudnn]==1.31.1 — exactly one, never both
 ```
 
-From source (Rust toolchain + maturin; `maturin develop` needs pip, which
-uv venvs lack — build the wheel and install it instead):
-
-```bash
-maturin build --release
-uv pip install --python <venv> target/wheels/embroider-*.whl --reinstall
-```
-
-## Module layout
-
-| Module | Role |
-|---|---|
-| `providers` | provider-name matrix (`cuda`/`rocm`/`directml`/`openvino`/`coreml` + implicit `cpu`) + clone-and-fallback application (`apply_providers` = arena on; `apply_providers_with_arena` carries the flag) |
-| `probe` | corrected CUDA availability check (`OnceLock`-cached) |
-| `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`/`int8`) + explicit `SessionPolicy` (`text_embed()`, `rerank_pair()`, `decide_pair()`, `laya()`, `decider2b()`, `ort_defaults()`) |
-| `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`), embedding registry (`ModelSpec`) + task registry (`TaskSpec`: rerank/decide) |
-| `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
-| `diag` | `OrtReport` — `ORT_DYLIB_PATH` value + CUDA usability for logs |
-| `jina` | `JinaV5` + `TokenizerHandle` — the frozen embedding contract |
-| `rerank` | `Reranker` — the cross-encoder scoring contract (pair seam + `score_long` windowing) |
-| `decide` | `Decider` — the typed-decision contract (`Choice`/`Score` questions, truncate-state-side-first) |
-| `decider2b` | `Decider2B` — the slot-layout contract (Qwen3.5-2B decoder, `input_ids` + `slot_pos`, 32k ctx, parallel executor on CUDA) |
-
-The default (pure-Rust) build is Python-free — no `pyo3` in downstream
-trees; the `extension-module` Cargo feature gates the PyO3 bindings and is
-enabled only for wheel builds (maturin), the same pattern bobine uses.
-
-## Using embroider without Jina
-
-The policy layer is model-agnostic — bobine uses it for converter models
-(RapidOCR, layout, tables, formulas) without ever touching `JinaV5`.
-The recipe, in full (reference implementation: bobine's
-`engine::session_builder`):
-
-```rust
-let builder = ort::session::Session::builder()?;
-let tuned = embroider::SessionPolicy::ort_defaults().apply(builder)?;
-let session = embroider::apply_providers(tuned, providers)?.commit_from_file(path)?;
-```
-
-plus `embroider::cuda_available()` for the auto-GPU decision and
-`embroider::report()` for the which-binary-serves-what diagnostic.
-
-The boundary is deliberate:
-
-| embroider owns | Consumer owns |
-|---|---|
-| Session tuning (`SessionPolicy`), provider fallback (`apply_providers`), CUDA probe, dylib report, `owner/name` parsing | Model fetch (own HF client, own repo constants), preprocessing, IO wiring, decoding |
-
-Generic fetch + session-build helpers (a model-agnostic "N files from
-repo R" to complement the Jina-shaped acquisition) are a natural
-future addition — additive, no contract risk. Inference itself stays
-with the consumer by design.
-
-## Runtime: ONNX Runtime discovery
-
-`ort` loads dynamically (`load-dynamic`, same pin as bobine:
-`2.0.0-rc.13`). Resolution order: `ORT_DYLIB_PATH` first (user override
-always wins), else the pip-installed `onnxruntime`/`onnxruntime-gpu`
-build when unset. okfgraph's `resolve_ort_dylib()` runs before the native
-module is imported, so bobine and embroider share **one** ORT binary — no
-version/CUDA drift between ingest and import. Since 0.14.0 the loader
-path is self-servicing (see [Runtime inventory](#runtime-inventory-which-dylib-which-cuda)):
-before the first CUDA session, `embroider` prepends the venv's NVIDIA
-wheel directories, the `onnxruntime` capi dirs, and the system CUDA/cuDNN
-roots to `PATH` when missing, and delivers the venv's best dylib via
-`ORT_DYLIB_PATH` only when unset — a fresh process no longer depends on
-ambient `PATH` for `cudnn64_9.dll`, and an explicit pin still wins.
-
-## Text embeddings
-
-### Lazy sessions
-
-`JinaV5.open` (model download + ONNX session build) is the single
-expensive step. OKFgraph therefore holds a lazy proxy: construction
-validates the wheel import and device string eagerly, but the session
-opens on the first real encode — PPR search, budgeted reads, diff, and
-doctor stay cold.
-
-`JinaV5.open(model_id, revision=None, cache_dir=None, truncate_dim=512,
-device="auto", max_length=None, precision=None, cpu_arena=False)`:
-`max_length` caps encodes at 1..=32768 (`None` = 8192 compat default;
-`.max_length` reports the effective limit), `precision` selects weights
-(`auto`/`fp32`/`fp16`, `None` = `auto`; `.precision` reports the
-effective choice), `cpu_arena=False` disables the CPU arena allocator
-(8x lower peak RSS for ~1.4x encode time, measured on the FP32 text
-model).
-
-A failed session open is cached and re-raised — configuration errors fail
-fast once, not once per encode.
-
-### Weight precision (`auto` by default)
-
-`auto` follows the *resolved* device (CUDA → FP16, CPU → FP32), so
-CUDA-requested-but-missing degrades to FP32 weights instead of stranding
-FP16 on CPU (FP16-on-CPU runs >40x slower than FP32-CPU — measured).
-`fp16` maps the default model id to the published FP16 mirror repo
-(`opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16`);
-explicit model ids (omni tower, mirrors) always win untouched. An explicit
-`fp16`-on-CPU warns loudly but is honoured. Do not mix precisions in one
-index — FP32 vs FP16 weights shift vectors, same as mixing tuning levels.
-`q8` selects the weight-only int8 tier where the registry lists one
-(decider-2b, v4-edge, all three Laya, both rerankers — GLiClass-small
-failed the 0-flip gate and stays fp32-only). Unlike fp16, q8 runs on any
-device (activations stay fp32); `auto` never resolves to q8 — it is an
-explicit deployment choice, same rule as int8.
-
-### Memory: CPU arena off by default
-
-`cpu_arena=False` registers the CPU execution provider explicitly with
-its arena allocator disabled — measured 8x lower peak RSS (15.3 → 1.9 GB
-on FP32) for ~1.4x encode time. Pass `True` only when peak throughput
-beats memory pressure. Vision slots likewise run with the CPU arena off.
-
-## Vision embeddings
-
-Two slots. The Jina slot maps image bytes into the text-nano space
-(text-nano graphs only — the registry's `text_partner` pin refuses
-anything else). The Gemma slot (`GemmaVision`,
-`google/embeddinggemma-2-vision`, Apache-2.0) maps images into the
-`google/embeddinggemma-2` text space cross-modally — same pipeline
-shape, different tower, prompts, and host math.
-
-### Opening and encoding
-
-`JinaV5Vision.open(model_id="jina-v5-omni-nano-retrieval-vision",
-truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None)`
-embeds one already-resized RGB image (`encode_image(rgb_bytes, h, w)`
-where `(h, w)` is its own `vision_target_size(h, w)` — Pillow bicubic
-resize on the caller side; anything else is rejected rather than
-embedded under the wrong resolution contract). Image vectors compare
-against text-nano text vectors only (`text_partner` in the registry).
-The dynamic-grid graph takes six inputs; the three grid tensors
-(`vision_pos_ids`, `interp_indices`, `interp_weights`) are computed on
-the host, bit-identical to transformers (fixture-pinned). `auto`
-precision → fp16 on CUDA / fp32 on CPU; explicit fp16-on-CPU is an
-error (the graph stalls on CPU — it doesn't merely run slow, so
-fail-fast beats a hung batch). Sessions use the vision-slot policy
-(ORT defaults, never the text tuning), CUDA
-`arena_extend_strategy=kSameAsRequested`, optional `gpu_mem_limit`
-bytes, CPU arena off. Every encode re-checks `seq == image_tokens +
-15` so a wrong tokenizer fails loudly instead of shifting the space.
-
-### Gemma vision slot
-
-`GemmaVision.open(model_id="google/embeddinggemma-2-vision",
-revision=None, cache_dir=None, truncate_dim=512, device="auto",
-precision=None, gpu_mem_limit=None)` embeds one already-resized RGB
-image (`encode_image(rgb_bytes, h, w)` where `(h, w)` is its own
-`gemma_vision_target_size(h, w)` — Pillow bicubic resize on the caller
-side). Two sessions run per encode: the SigLIP-style vision tower
-(`pixel_values` + `pixel_position_ids` in, `image_features` `[K,512]`
-out, K = pooled real-patch count) and the text tower from `text_partner`
-at the same precision tier, fusing with `[bos, boi, image × K, eoi,
-eos]` ids and the native `sentence_embedding` head. Host math ports the
-transformers image processor exactly (aspect-preserving resize to
-multiples of 48, rescale /255, no normalize, patch 16, `[col,row]`
-positions, `[-1,-1]` pad). `auto` precision → fp16 on CUDA / fp32 on
-CPU; explicit fp16-on-CPU is an error (the tower NaNs under emulated
-fp16 — fail fast). `open_files(vision_onnx, text_onnx, tokenizer, ...)`
-takes explicit files. Goldens live in `fixtures/gemmavision/`
-(sentence-transformers references) with the ignored
-`tests/gemma_vision_e2e.rs` asserting cos = 1.0 fp32 CPU/CUDA and fp16
-CUDA plus a cross-modal rank pin.
-
-## Rerank
-
-Cross-encoder pair scoring: one `(query, document)` forward → one
-relevance logit (higher = more relevant). Same ORT runtime, same session
-policy machinery, no vector space — scores reorder candidates, they never
-enter an index.
-
-`Reranker.open(model_id, revision=None, cache_dir=None, device="auto",
-max_length=None, precision=None, cpu_arena=False)`: `max_length` caps
-pairs at 1..=512 (`None` = the registered ceiling; `.max_len` reports
-the effective limit), `precision` selects weights (`auto`/`fp32`/`q8`; q8 tiers are listed where measured — the quant-spike rule, so `auto`
-lands fp32 everywhere for rerank today). `score_one(query, doc)` scores a pair;
-`score_many([(q, d), …])` scores a batch in one padded session run
-(order-preserving); `count_tokens(text)` reports true length without
-specials through a truncation-free handle (shared helper with JinaV5).
-
-Truncation is truncate-doc-side-first: the query is never cut to fit the
-document, and a query that alone fills the cap raises instead of scoring
-garbage. The loader feeds `token_type_ids` only when the graph declares
-them (MiniLM 3-input vs mMARCO 2-input, discovered at load) and reads
-the `logits` output. Documents past the pair cap go through
-`score_long(query, doc, window=None, stride=None)` — sliding windows
-with 50%-overlap steps by default and MaxP aggregation (a document is
-relevant if any part answers); chunk planning is weight-free and
-unit-tested, and single-window inputs score exactly like `score_one`
-(e2e-pinned).
-
-Goldens live in `fixtures/golden_rerank_*.json` (ORT 1.31.1 CPU, abs
-1e-6 — re-recorded from 1.29.0 at 0.13.0, max drift 2.9e-6;
-torch parity 2.9e-6/7.7e-6 at pinned revisions) with the ignored
-`tests/rerank_e2e.rs` asserting them plus per-language relevant-beats-
-irrelevant ordering. Precision notes from the spike: fp16 rejected
-(slower + drift), int8 gated on a wider harness, CUDA opportunistic
-(~1.5x at batch, worse at b1) — see
-docs/[rerank-typed-decision-record.md](docs/rerank-typed-decision-record.md).
-
-## Decide
-
-Typed questions over a state: one calibrated distribution per question,
-single forward pass. `Decider.open(model_id, revision=None,
-cache_dir=None, device="auto", max_length=None, precision=None,
-cpu_arena=False)`: `max_length` caps sequences at 1..=512 (`None` = the
-registered ceiling; `.max_len` reports the effective limit). `decide(state,
-questions)` answers a batch in one padded session run, order-preserving;
-`decide_many([(state, question), …])` batches across states.
-
-`Question::Choice` is single-label (stable softmax — exactly one option
-wins); `Question::Score` is multi-label (sigmoid, native and
-unthresholded — the consumer fits thresholds, because the B0 probe showed
-raw multi-label sigmoids systematically over-confident: `quantum physics`
-at 1.0 on a football text). `Question::Noul` is declared but
-loud-unsupported — no registered model serves none-of-the-above, so it
-errors instead of degrading into a threshold nobody fitted.
-
-Input construction is contract, pinned like the rerank pair seam.
-Small-v1.0 is text-first: `state + (<<LABEL>>option)* + <<SEP>> +
-instructions` (`prompt_first=false`); v4-edge is labels-first:
-`(<<LABEL>>option)* + <<SEP>> + instructions + state`
-(`prompt_first=true`, recorded per model in the registry — `open()`
-resolves it, `open_files` takes it caller-side). Truncate-state-side-first
-with manual id concatenation in both layouts (the pair-tokenizer
-`OnlySecond` pattern would cut the wrong side). Temperature is identity
-— neither model ships fitted temps (v4's calibration lives in its
-graph). Goldens live in `fixtures/golden_decide_gliclass_{small,v4edge}.json`
-(ORT 1.31.1 CPU — small re-recorded from 1.29.0 at 0.13.0, max drift
-1.6e-6; small abs 1e-6, v4 abs 0.03 — the embedded calibrator
-accumulates kernel-order drift; exact-match labels, torch exact / Δ
-0.028 on the B0 probes) with the ignored `tests/decide_e2e.rs`
-asserting them plus the layout proof per recipe. GLiClass-small is
-the seam-proving spike; v4-edge is the better model (calibrated,
-instruction prompts); Laya (native typed questions, descriptions,
-level-scores, noul) is served by `LayaDecider` — see `## Laya` below.
-
-## Laya
-
-Marker-layout typed decisions: the state goes in as plain tokens and
-the questions arrive as **marker positions** — 5 inputs (`input_ids`,
-`attention_mask`, `marker_pos`, `marker_mask`, `qtype`), 2 outputs
-(`logits`, `act_logits`). `LayaDecider.open(model_id, ...)` serves the
-three registered `convaiinnovations/laya-*` checkpoints from the
-`opticsWolf/laya-*-fp32-onnx` self-exports (graph + sidecar +
-tokenizer + `rl_agent_config.json`, all from the artifact repo);
-`open_files(onnx_path, tokenizer_path, config_path, ...)` takes
-explicit files — the config is required, never optional: it carries
-the checkpoint truth (ceilings, temperatures, layout check) and
-caller-supplied temps would silently fork the calibration.
-
-`LayaQuestion::{Choice, Score, Noul}` mirrors laya's qdefs, not
-`Question`: Choice carries labels with optional descriptions
-(single-label softmax), Score carries ordered LEVELS (one distribution
-over levels — expected value in `.value`, top level in `.label`), Noul
-carries one statement (P(true) — the rerank primitive). The four
-structural tokens (`[CLS]`/`[SEP]`/`[MASK]`/`[PAD]`) resolve from the
-sibling `tokenizer_config.json` exactly the way HF resolves
-`cls_token_id` — the multilingual checkpoint maps them onto
-`<bos>`/`<eos>`/`<mask>`/`<pad>`, and hardcoding the BERT names
-refused to open it. `LayaDecider::open` fetches that file from the repo
-when it has one, so registry opens need no extra files argument. Score here is
-*not* GLiClass's multi-label sigmoid; the two must never share a
-question type, so `Decider::open` refuses Laya ids (and `LayaDecider`
-refuses non-Laya ids) instead of failing late on the wrong graph.
-`option_order` permutes option slots (reported back in caller order);
-it must be an exact permutation — a silent misindex would attach
-probabilities to the wrong options.
-
-Temperature is fitted, not identity: per-bucket scales from the config
-(`choice:2`, `choice:3-5`, …, `noul:2`) clamped to [0.5, 5.0] with the
-rejections queryable via `temperature_rejections()` (the shipped
-`choice:11+` 0.1006 sharpens ~10x — the clamp refuses it). Decode is
-`logits/t → softmax → unpermute → per-type shape` in float64 (the
-agent's numpy arithmetic), cast to f32 at the boundary; act head reads
-`softmax(act_logits)[0]` (`.act_probability`, feeds escalation).
-Collation pads marker columns to `max(kmax, 2)` — the exported head
-takes `topk(2)`, so one-option questions still collate two columns.
-`predict_long(state, questions, window, stride)` scans states past the
-cap: token windows (default `max(64, max_len - head_max_len - 8)` — the
-checkpoint's own state budget — clamped to the room the questions
-leave, 50%-overlap steps), one shared session run for all windows,
-per-type aggregation (noul: strongest P(true); choice/score:
-most-confident window). Returns the deciding window's decision plus
-its token span — that window's numbers, not calibrated document
-numbers. A `BinningMap` overlay (`load_binning_map`, bare map or laya
-calibration payload) remaps `answer_confidence` for fitted buckets
-and passes the rest through; no checkpoint ships one. Goldens live in `fixtures/golden_laya_td.json` (agent-built rows + raw
-float64 reference decode, 7 cases incl. permutation + solo + relevance
-probes) with the ignored `tests/laya_e2e.rs` asserting exact input-id
-+ marker equality and 1e-6 on every number. Deliberately not ported:
-`predict_long` scans (caller windows + aggregates), `binning_map`
-(no checkpoint ships one), `lang_temperatures`, hooks/serve.
-
-## Decider-2B
-
-Slot-layout typed decisions: `Decider2B.open(model_id, ...)` serves
-the `Mapika/decider-2b` checkpoint (Qwen3.5-2B decoder + slot head)
-from the `opticsWolf/decider-2b-fp32-onnx` self-export — 7.6MB
-weightless graph + 3.76GB vendored safetensors + tokenizer +
-`decision.json` + `calibration.json`, all fetched from the artifact
-repo (`open_files(onnx, tokenizer, decision, calibration, ...)` takes
-explicit files; both configs are required, never optional). One row
-per question: `Context:` + state, then options with lettered choices
-(`(A) …`, one label token each past 10 options) and a trailing
-`Answer: (` whose slot is scored over the 255 label ids; score
-questions become one yes/no row per level (isolated fit). Two inputs
-(`input_ids`, `slot_pos`, no attention mask — causal, right padding
-trails the slot), one output (`label_logits`). Temperatures are the
-checkpoint's own `(choice, score, noul)` triple from
-`calibration.json` clamped to its `[0.05, 5.0]` range — the fitted
-noul temp IS 0.05, so a Laya-style 0.5 floor would corrupt it.
-Questions mirror `LayaQuestion` except noul, which carries BOTH
-criteria (`("noul", ins, true_criterion[, false_criterion])` —
-rendered `yes: …` / `no: …`; the reference layout has no
-`option_order`, so neither does this port). CUDA runs the parallel
-executor with default thread pools: the sequential planner aliases a
-shape buffer on this graph (ORT #4829 class — a chunk-scan Reshape
-reads a zeroed dim and fails on the first batch), the C-level
-`enable_mem_reuse=false` is unreachable from the C API, and an
-explicit `inter_op_num_threads=1` re-triggers it — all probed.
-`fixtures/golden_decider2b.json` (8 cases incl. the 12-option wide
-path + a mixed multi batch) pins exact input ids and 5e-4 answers on
-CPU *and* CUDA (`tests/decider2b_e2e.rs` — the CUDA leg gates the
-executor switch). 32k context, fp32 + q8 (q8: 1.59 GB int8 linears + the vendored safetensors alongside, worst 0.0020, 0 flips), CPU slow-tier (~1.5–2 s/row).
-
-## Running without downloads
-
-### Tokenizer-only counts
-
-`JinaTokenizer.open` fetches only `tokenizer.json` for exact token counts
-without the session (~0.5 s cold, 9× cheaper than a session open). It
-never truncates, so counts report true length — `JinaV5.count_tokens()`
-instead reflects the session's `max_length`.
-
-### Cache inspection (offline)
-
-`embroider.cache_info(model_id, revision=None, cache_dir=None,
-precision=None)` answers "is this model already cached, and where?"
-without opening a session or touching the network — the pre-flight check
-for UIs and config validation (okfgraph's `model_info()`):
+From source: `maturin build --release`, then install the wheel
+(`maturin develop` needs pip, which uv venvs lack).
 
 ```python
-from embroider import cache_info
-
-info = cache_info("jinaai/jina-embeddings-v5-text-small-retrieval", precision="fp16")
-info["cached"], info["repo"], info["snapshot_path"], info["disk_usage_bytes"]
-info["files"]   # per-file paths: model, sidecar (if any), tokenizer.json
+from embroider import JinaV5
+m = JinaV5.open("jinaai/jina-embeddings-v5-text-small-retrieval")
+v = m.encode("what do badgers eat?", task="query")   # 512-d unit vector, golden-pinned
 ```
 
-It resolves the artifact exactly like `open()` (`lookup_model` →
-`artifact_for`): the default id at `precision="fp16"` reports the FP16
-mirror repo, multi-file repos list their `.onnx_data` sidecar.
-`cached=True` means an offline `open()` would succeed — model file +
-`tokenizer.json` present (a missing sidecar only warns at open). No
-device probe: `precision=None` reads fp32; `precision="auto"` and bare
-legacy ids (`no-slash`) raise `ValueError` before any I/O. Rust
-consumers get the same inspection as `embroider::cache_info` →
-`CacheReport`.
+## Docs
 
-The generic `embroider.cache_info_files(repo, files, revision=None,
-cache_dir=None)` covers non-registry layouts (converter models, custom
-repos): `files` takes bare names (required) or `(name, required)`
-pairs, `cached` is true when every required file is present, `model_id`
-echoes the repo, and `precision` is `None`. Same offline contract, same
-dict keys — the surface bobine's `model_status()` builds on.
-
-### Runtime inventory (which dylib, which CUDA)
-
-`embroider.runtime_info()` inventories the ONNX Runtime situation in
-one dict: the loaded dylib (`ORT_DYLIB_PATH`, with existence check),
-its sibling provider DLLs, every `onnxruntime*` install in the active
-venv (CPU and GPU builds side by side), the CUDA/cuDNN runtime DLLs
-the `nvidia*` dists ship (grouped: `nvidia/cu13`, `nvidia/cudnn`),
-and the CUDA-usability probe. `embroider.save_runtime_info(path)`
-writes the same report as pretty JSON (creating parent dirs) — a
-bench harness saves it next to its numbers so a later reader knows
-exactly which dylib, providers and CUDA files produced them:
-
-```python
-from embroider import runtime_info, save_runtime_info, configure_runtime
-info = runtime_info()
-info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
-save_runtime_info("bench/run-001/runtime.json")
-
-from embroider import prepare_cuda_runtime
-prepare_cuda_runtime()   # 0.14.0+: idempotent, never throws; the same
-                         # PATH prep every CUDA open already runs itself
-```
-
-`configure_runtime(dylib_path=None, dll_dirs=None)` is the write
-half: `dylib_path` becomes `ORT_DYLIB_PATH` (must exist; effective
-only before the first `open()` in the process — ort pins the first
-library it initializes, and even `runtime_info()`'s probe counts as
-a first touch, so set the dylib before anything else), `dll_dirs`
-are prepended to `PATH` (effective immediately — pass
-`info["load_dirs"]` to reproduce a saved layout, which is what
-makes `cudnn64_9.dll` resolve out of site-packages for cuDNN-backed
-ops like GLiClass's `ReduceMax`). Returns the post-call report. The
-venv scan follows `VIRTUAL_ENV` with a `sys.prefix` fallback, so a
-non-activated interpreter still sees its own installs. `prepare_cuda_runtime()`
-(0.14.0) runs the same directory collection `open()` already performs
-before the first CUDA session — call it directly for parity checks or
-surface tests; CPU-only requests skip it, and it never throws.
-
-The venv scan follows `VIRTUAL_ENV` (unset = installs unknown, the
-probe fields still report); duplicate spellings of one venv
-(`Lib/` vs `lib/`) list once. Keys are stable
-(`ort_dylib`, `ort_dylib_exists`, `sibling_provider_dlls`,
-`cuda_usable`, `ort_installs`, `cuda_runtime_dlls`, `load_dirs`,
-`virtual_env`) — JSON today, trivially TOML-convertible.
-
-### Explicit local files (air-gapped)
-
-`JinaV5.open_files(onnx_path, tokenizer_path, truncate_dim=512,
-device="auto", max_length=None, cpu_arena=False)` and
-`JinaTokenizer.open_files(tokenizer_path)` skip every download. The
-sidecar (`model.onnx_data`-style) must sit next to the ONNX file — ORT
-resolves it relative to the model path, same as the HF cache layout.
-Precision selection does not apply here — the files are what they are
-(reported precision reads `fp32`; pass FP16 files explicitly for FP16
-weights). OKFgraph's `OKFRouter(model_path=..., tokenizer_path=...)`
-uses them (both or neither; missing files raise `FileNotFoundError` at
-construction). Same bytes in → same vectors out (test-pinned against HF
-acquisition).
-
-## Session/threading policy (measured)
-
-Tuning is `Level3`, intra = physical-cores/2, inter = 1 — kept because it
-measured fastest, not because it was inherited. Reference box: Windows,
-32 logical cores, CPU-only ORT 1.29, warm model cache, best-of-5 reps on
-4 fixed docs (short → ~400 tokens):
-
-| Config | Session cold open | `encode_batch` (4 docs) | Notes |
-|---|---|---|---|
-| Level3, intra=16, inter=1 (**current**) | 4.7 s | **375 ms** | kept |
-| Level1, intra=16, inter=1 | 5.5 s | 433 ms (+15%) | slower *and* bit-different vectors |
-| Level3, intra=32, inter=1 | 4.5 s | 411 ms (+10%) | full-logical loses to phys/2 (SMT contention) |
-| 4× `encode_one` vs 1× `encode_batch` | — | 389 vs 375 ms | one boundary crossing saves ~3%; sequential stays |
-| Tokenizer-only cold open | 0.5 s | — | 9× cheaper than session open; budgeted reads stay cold |
-
-Two consequences:
-
-- **Do not mix tuning in one index.** Level1 vs Level3 fuse the graph
-differently, so bits differ (hashes diverged at 1e-8 formatting). Same
-model + same build + same tuning, or re-embed.
-- **Sequential batching stays.** Padded batching would waste attention on
-variable-length docs to save ~14 ms of boundary overhead — not worth the
-numerics risk.
-
-`SessionPolicy::ort_defaults()` exists for consumers (bobine's converter-model
-sessions — RapidOCR, layout, tables, formulas) that never tuned — policy is
-data, never a forced default.
-Re-measure on new hardware/ORT before changing the policy.
-
-## Pitfall: stale `onnxruntime.dll` on Windows
-
-Windows boxes can carry a stale `C:\Windows\System32\onnxruntime.dll`
-(v1.17.1 in the wild). With `ORT_DYLIB_PATH` unset, `ort` may load it and
-die with `BadVersion { version_str: "1.17.1" }`, followed by an abort at
-shutdown (fallout from ort's exit handler, not the root cause). Point
-`ORT_DYLIB_PATH` at a modern build — e.g. the venv's
-`onnxruntime/capi/onnxruntime.dll`. Same pitfall bobine documents in its
-`docs/benchmarks.md`.
+- [docs/quickref.md](docs/quickref.md) — the complete user manual:
+  every loader, every parameter, copy-paste Python and Rust.
+- [docs/architecture.md](docs/architecture.md) — how it works: module
+  layout, session policy and measurements, runtime discovery, the
+  frozen-contract rules, registry and precision design, conformance.
+- [docs/compat.md](docs/compat.md) — release matrix, model sizes and
+  serving guidance, per-entry licences.
+- [docs/rerank-typed-decision-record.md](docs/rerank-typed-decision-record.md) —
+  how the rerank and decide engines were chosen, measured, and gated.
+- [docs/model-registry-record.md](docs/model-registry-record.md) — the
+  registry design (builtin + overlay, revision pins).
+- [docs/model-conversion.md](docs/model-conversion.md) — the conversion
+  playbook: weights to parity-gated ONNX.
 
 ## Failure policy
 
 | Level | Behaviour |
 |---|---|
-| Install | The wheel is a core dependency of the consumer; if it is missing or fails to import, the consumer raises a clear `RuntimeError` with the install hint — never an `ImportError` from deep inside, never a silent fallback. |
-| Device | Accelerators are opportunistic: `auto`/`cuda` use CUDA when the loaded ORT registers the EP, else warn (stderr) + CPU. `used_cuda` reports the outcome. Never fatal. Unknown provider names warn and are skipped; registration failure degrades to CPU. `precision='auto'` follows the landed device (CUDA→FP16, CPU→FP32); explicit `fp16`-on-CPU warns but is honoured. |
-| Encode | **Fail fast.** No fallback at encode time — vectors must stay bit-comparable within one index. |
-| Tokenizer | No transformers in the runtime path, anywhere: internal tokenize + `count_tokens()` (== `tokenizer.encode(t, add_special_tokens=False)`) feed the context-window guard. |
+| Install | Missing wheel → clear `RuntimeError` with the install hint; never a silent fallback. |
+| Device | Accelerators are opportunistic: `auto`/`cuda` use CUDA when the loaded ORT registers the EP, else warn + CPU. `used_cuda` reports the outcome. |
+| Encode | **Fail fast.** No fallback — vectors must stay bit-comparable within one index. |
+| Precision | `auto` follows the landed device (CUDA→FP16, CPU→FP32); explicit fp16-on-CPU warns for text, errors for vision. |
 
-## Contract notes
-
-- Session IO is discovered at load (`input_ids` + `attention_mask` required,
-  `token_type_ids` fed only if declared — v5's export doesn't declare it,
-  which is where generic runners fail). Output prefers `last_hidden_state`.
-- `truncate_dim` validated (32–1024, warning off the Matryoshka ladder).
-  `max_length` validated (1..=32768, `None` = 8192 compat default);
-  `MAX_LENGTH` / `MODEL_MAX_TOKENS` are exposed for the window guard.
-  Same (text, `max_length`) → same vector; short inputs are bit-identical
-  at any limit, while longer inputs change once the old truncation lifts.
-  A 32K-token forward is O(n²) memory — size the limit to the machine.
-- Batch encoding is sequential by design (padded batches waste attention
-  compute on variable-length docs). GIL is released during encode.
-- Vision: one image per call (`seq = patches/4 + 15`, ≤1295 tokens).
-  Inputs `input_ids`/`attention_mask` int64, `pixel_values` float32,
-  `vision_pos_ids`/`interp_indices` int64, `interp_weights` float32;
-  output `sentence_embedding` float32 `[1,768]`, then the same
-  L2 → truncate → re-normalise as text (same Matryoshka ladder).
-- `input_ids`/`attention_mask` feed as int64; pooling takes the last
-  attended token (`mask_sum - 1`, clamped ≥ 0).
-
-## Conformance
-
-`fixtures/golden_jina_v5_text_small.json` pins the frozen vector space:
-4 canonical texts × Query/Document prefixes × dims 64/512 (12 vectors) +
-exact token counts, generated with embroider 0.1.3 / onnxruntime 1.29.0
-CPU / text-embed policy and byte-identical green on 1.31.1. Unchanged by 0.1.4 (`max_length`) and 0.1.5
-(`precision`, `cpu_arena`) for short inputs at defaults. Consumers vendor
-this file and assert live vectors against it (`abs=1e-6` — catches wrong
-model, pooling, prefix, or truncation; immune to cross-CPU noise). Regenerate only on an
-intentional contract change, which is a new minor version plus a
-re-index-everything notice. See [docs/compat.md](docs/compat.md) for the release matrix.
-Vision host math is pinned the same way: `fixtures/vision/`
-(`target_sizes.json`, `host_tensors.json`, `pixel_cases.json`) generated
-from the spike's verified `grid.py`; the Rust port asserts bitwise
-equality, and `fixtures/vision/e2e/` (5 real figures + torch goldens)
-backs the ignored end-to-end parity test.
-
-## Testing
-
-- **Rust unit tests** (111, pure — no network, no dylib, no tokenizer
-  file): device/precision parsing, precision-follows-device resolution,
-  FP16 repo selection, model-id parsing, provider-matrix mapping,
-  task-prefix idempotence, the L2 → truncate → re-normalise math,
-  contract constants, `open()`/`open_files()` validation (dims,
-  `max_length`) firing before I/O, offline cache inspection
-  (`cache_info`: registry artifact resolution, fake-cache hit/partial/
-  full miss, `auto`/bad-id refusal; the EmbeddingGemma 2 registry entry
-  (contract, fp32/fp16 artifacts, mirror revision) + Gemma prompt/mean-pool
-  selection; generic `cache_info_files`:
-  required/optional semantics, pinned revision, delegation parity), the vision registry entry, the
-  vision resize contract (incl. banker's rounding and aspect rejection),
-  host tensors bit-identical to `fixtures/vision/` on all 31 grids, the
-  pixel pipeline bit-identical on 3 cases, and the vision fp16-on-CPU
-  refusal.
-
-  ```bash
-  cargo test --locked
-  ```
-
-- **Vision end-to-end** (`tests/vision_e2e.rs`, ignored — needs ORT
-  1.31 dylib, the vision weight files, and ideally CUDA): 5 real
-  figures vs torch-native goldens, cos ≥ 0.9999 fp32 / ≥ 0.999 fp16.
-
-  ```bash
-  ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
-    VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \
-    VISION_E2E_CUDA=1 cargo test --offline --test vision_e2e -- --ignored
-  ```
-
-- **Python parity** lives with the consumers: OKFgraph's
-  `tests/test_parity.py` (marked `slow`) pins Rust output against a
-  numpy/transformers replication across dims × tasks × texts at ≤ 1e-5;
-  `tests/test_rust_backend.py` / `tests/test_rust_e2e.py` cover the
-  wheel import, the count-tokens contract, and real-model encodes.
+Same (model, precision, tuning, `max_length`) or re-embed — never mix
+precisions or tuning levels in one index.

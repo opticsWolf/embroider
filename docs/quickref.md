@@ -1,6 +1,6 @@
 # embroider — Quick Reference
 
-Copy-paste surface. Rationale lives in `README.md`, release matrix in
+Copy-paste surface. Design rationale lives in `architecture.md`, release matrix in
 [compat.md](compat.md).
 
 ## Install
@@ -90,6 +90,13 @@ m = JinaV5.open("myorg/my-encoder")
 m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8")
 ```
 
+`open` is the single expensive step (download + session build); a failed
+open is cached and re-raised, so config errors fail fast once. `max_length`
+caps encodes at 1..=32768 (`None` = 8192 compat default; `.max_length`
+reports the effective limit). `cpu_arena=False` (default) disables the CPU
+arena allocator — 8x lower peak RSS (15.3 → 1.9 GB on FP32) for ~1.4x encode
+time; pass `True` only when peak throughput beats memory pressure.
+
 ### Devices and precisions
 
 | `device=` | Meaning |
@@ -108,7 +115,26 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8
 `max_length`: 1–32768, default 8192 (compat); same (text, `max_length`)
 → same vector, short inputs bit-identical at any limit.
 
+`auto` follows the *resolved* device, so CUDA-requested-but-missing degrades
+to FP32 weights instead of stranding FP16 on CPU (FP16-on-CPU runs >40x
+slower than FP32-CPU — measured). `fp16` maps the default id to the published
+FP16 mirror repo; explicit model ids always win untouched. An explicit
+`fp16`-on-CPU warns loudly but is honoured for text. Do not mix precisions
+in one index — FP32 vs FP16 weights shift vectors, same as mixing tuning
+levels.
+
 ## Vision embeddings (Python)
+
+Two slots with the same encode shape. The Jina slot maps image bytes into
+the text-nano space (text-nano graphs only — the registry's `text_partner`
+pin refuses anything else); the Gemma slot (`google/embeddinggemma-2-vision`,
+Apache-2.0) maps them cross-modally into the `google/embeddinggemma-2` text
+space. Each fuses its tower with a text tower at the same precision tier.
+Resize on the caller side to exactly the slot's target size with Pillow
+bicubic — anything else is rejected rather than embedded under the wrong
+resolution contract. `auto` precision → fp16 on CUDA / fp32 on CPU;
+explicit fp16-on-CPU is an error in both slots (the Jina graph stalls on
+CPU; the Gemma tower NaNs under emulated fp16 — fail fast either way).
 
 ```python
 from embroider import JinaV5Vision, vision_target_size
@@ -121,30 +147,45 @@ rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
 vec = v.encode_image(rgb, h, w)   # compares against text-NANO vectors only
 ```
 
-fp32 on CPU, fp16 on CUDA (`auto` default). Explicit fp16-on-CPU is an
-error (the graph stalls — fail-fast, not slow).
+The dynamic-grid graph takes six inputs; the three grid tensors
+(`vision_pos_ids`, `interp_indices`, `interp_weights`) are computed on the
+host, bit-identical to transformers and fixture-pinned. Every encode
+re-checks `seq == image_tokens + 15`, so a wrong tokenizer fails loudly
+instead of shifting the space. Vision slots run the vision-slot session
+policy (ORT defaults, never the text tuning; CUDA
+`arena_extend_strategy=kSameAsRequested`, optional `gpu_mem_limit`, CPU
+arena off).
 
 ```python
 # local weight files (sidecar .onnx_data must sit next to model.onnx)
 v = JinaV5Vision.open_files("model.onnx", "tokenizer.json")
 
 # cap CUDA arena growth (bytes); CPU arena is always off here
-v = JinaV5Vision.open(gpu_mem_limit=2_000_000_000)
+v = JinaV5Vision.open("jina-v5-omni-nano-retrieval-vision",
+                      gpu_mem_limit=2_000_000_000)
+```
 
 ```python
 from embroider import GemmaVision, gemma_vision_target_size
-# Gemma vision slot (Apache-2.0): same encode shape, different tower/prompts/host math
+# Gemma vision slot: tower + text-tower fusion, same encode shape
 g = GemmaVision.open("google/embeddinggemma-2-vision")   # resize to gemma_vision_target_size(h, w) first (Pillow bicubic)
 v = g.encode_image(rgb_bytes, h, w)                        # unified with google/embeddinggemma-2 text space
 v = GemmaVision.open("google/embeddinggemma-2-vision", truncate_dim=128, device="cuda").encode_image(rgb_bytes, h, w)
 # explicit files: vision tower + text tower + tokenizer
 g = GemmaVision.open_files("vision_encoder.onnx", "model.onnx", "tokenizer.json")
 ```
-```
 
-Fail-fast surfaces: wrong resolution (`vision_target_size` mismatch),
-wrong tokenizer (`seq == image_tokens + 15` re-checked every encode),
-non-nano text partner — all raise, never embed.
+Two sessions run per Gemma encode: the SigLIP-style vision tower
+(`pixel_values` + `pixel_position_ids` in, `image_features` `[K,512]` out,
+K = pooled real-patch count) and the text tower from `text_partner`, fusing
+with `[bos, boi, image × K, eoi, eos]` ids and the native
+`sentence_embedding` head. Host math ports the transformers image processor
+exactly (aspect-preserving resize to multiples of 48, rescale /255, no
+normalize, patch 16, `[col,row]` positions, `[-1,-1]` pad).
+
+Fail-fast surfaces: wrong resolution (target-size mismatch), wrong
+tokenizer (Jina `seq` check), non-nano text partner — all raise, never
+embed.
 
 ## Rerank (Python)
 
@@ -169,7 +210,16 @@ r.count_tokens(long_doc)   # true length, no specials; budgets build on this
 
 Pair cap: `max_length` (default 512, the model ceiling); truncation is
 truncate-doc-side-first — the query is never cut to fit the document, and
-a query that alone exceeds the cap raises instead of scoring garbage.
+a query that alone exceeds the cap raises instead of scoring garbage. The
+loader feeds `token_type_ids` only when the graph declares them (MiniLM
+3-input vs mMARCO 2-input, discovered at load) and reads the `logits`
+output. `score_long` slides windows with MaxP aggregation (a document is
+relevant if any part answers); single-window inputs score exactly like
+`score_one` (e2e-pinned ≤1e-6). Scores reorder candidates — they never
+enter an index, and rerankers take no `truncate_dim`. Precision notes from
+the spike: fp16 rejected (slower + drift), CUDA opportunistic (~1.5x at
+batch, worse at b1). Goldens in `fixtures/golden_rerank_*.json` (torch
+parity 2.9e-6/7.7e-6 at pinned revisions).
 
 ## Decide (Python)
 
@@ -187,6 +237,19 @@ d4.decide(state, [("choice", "Apply the refund policy.", ["approved", "denied", 
 
 d.count_tokens(state)   # true length, no specials
 ```
+
+`Choice` is single-label (stable softmax — exactly one option wins);
+`Score` is multi-label sigmoid, native and unthresholded — the consumer fits
+thresholds, because raw multi-label sigmoids are systematically
+over-confident (the B0 probe: `quantum physics` at 1.0 on a football text).
+`Noul` is declared but loud-unsupported — no registered model serves it.
+Small-v1.0 is text-first (`state + labels + SEP + instructions`,
+`prompt_first=false`); v4-edge is labels-first (`prompt_first=true`, per
+model in the registry — `open()` resolves it, `open_files` takes it
+caller-side). Temperature is identity — neither model ships fitted temps
+(v4's calibration lives in its graph). Goldens in
+`fixtures/golden_decide_gliclass_{small,v4edge}.json` (small abs 1e-6, v4
+abs 0.03 — the embedded calibrator accumulates kernel-order drift).
 
 ## Laya (Python)
 
@@ -208,6 +271,22 @@ d.predict_long(long_doc, [("noul", "Does it answer Q?", "passage holds the answe
 d.load_binning_map("calibration.json")   # fitted overlay only; nothing shipped
 ```
 
+`open_files` takes the config path as required, never optional — it carries
+the checkpoint truth (ceilings, temperatures, layout check), and
+caller-supplied temps would silently fork the calibration. The four
+structural tokens resolve from the sibling `tokenizer_config.json` exactly
+the way HF resolves `cls_token_id` (the multilingual checkpoint maps them
+onto `<bos>`/`<eos>`/`<mask>`/`<pad>`); registry opens fetch that file
+automatically. Choice carries labels with optional descriptions (softmax);
+Score carries ordered LEVELS (one distribution — expected value in `.value`,
+top level in `.label`); Noul carries one statement (P(true) — the rerank
+primitive) and must not be confused with GLiClass multi-label Score, so each
+loader refuses the other's ids. Temperature is fitted per-bucket from the
+config, clamped to [0.5, 5.0] with rejections in `temperature_report()`.
+Decode is `logits/t → softmax → unpermute → per-type shape` in float64 (the
+agent's numpy arithmetic), cast at the boundary; the act head reads
+`softmax(act_logits)[0]` (`.act_probability`, feeds escalation).
+
 ## Decider-2B (Python)
 
 ```python
@@ -222,6 +301,19 @@ d.decide("My card was charged twice.", [
 # -> [(label, probs, value|None, confidence, answer_confidence), ...]  (no act head)
 d.temperature_report()   # ([2.465, 1.0, 0.05], clamp rejections) — [0.05, 5.0] range
 ```
+
+One row per question: `Context:` + state, then lettered choices (`(A) …`,
+one label token each past 10 options) and a trailing `Answer: (` slot scored
+over the 255 label ids; score questions become one yes/no row per level.
+Two inputs (`input_ids`, `slot_pos` — causal, no attention mask), one output
+(`label_logits`). Temperatures are the checkpoint's own triple from
+`calibration.json` — the fitted noul temp IS 0.05, so a Laya-style 0.5 floor
+would corrupt it. Noul carries BOTH criteria (`yes:` / `no:`); there is no
+`option_order` (the reference has none). CUDA runs the parallel executor
+with default thread pools (the sequential planner aliases a shape buffer on
+this graph — probed). 32k context, fp32 + q8 (worst 0.0020, 0 flips).
+Goldens in `fixtures/golden_decider2b.json` (exact ids, 5e-4 on CPU *and*
+CUDA).
 
 Sequence cap: `max_length` (default 512, the model ceiling); truncation is
 truncate-state-side-first — the options are the question and are never cut
@@ -273,6 +365,47 @@ info = cache_info_files("SWHL/RapidOCR",
 info["cached"]   # True when every required file is present
 # info["model_id"] echoes the repo; info["precision"] is None (no tier here)
 ```
+
+## Runtime inventory (which dylib, which CUDA)
+
+```python
+from embroider import runtime_info, save_runtime_info, prepare_cuda_runtime
+info = runtime_info()
+info["ort_dylib"], info["sibling_provider_dlls"], info["cuda_usable"]
+save_runtime_info("bench/run-001/runtime.json")   # pretty JSON next to the numbers
+
+prepare_cuda_runtime()   # idempotent, never throws; the same PATH prep
+                         # every CUDA open already runs itself
+from embroider import configure_runtime
+configure_runtime(dll_dirs=info["load_dirs"])   # reproduce a saved layout
+```
+
+One dict inventories the ORT situation: the loaded dylib (`ORT_DYLIB_PATH`,
+with existence check), sibling provider DLLs, every `onnxruntime*` install in
+the venv (CPU and GPU side by side), the CUDA/cuDNN DLLs the `nvidia*` dists
+ship, and the usability probe. `configure_runtime(dylib_path=None,
+dll_dirs=None)` is the write half — `dylib_path` is effective only before the
+first `open()` in the process (ort pins the first library it initializes, and
+even the probe counts as a first touch), `dll_dirs` prepend to `PATH`
+immediately (this is what makes `cudnn64_9.dll` resolve for cuDNN-backed ops
+like GLiClass's `ReduceMax`). Keys are stable (`ort_dylib`,
+`ort_dylib_exists`, `sibling_provider_dlls`, `cuda_usable`, `ort_installs`,
+`cuda_runtime_dlls`, `load_dirs`, `virtual_env`).
+
+## Explicit local files (air-gapped)
+
+```python
+# every loader has an open_files seam: downloads skipped, sidecar
+# (model.onnx_data-style) must sit next to the ONNX file — ORT resolves
+# it relative to the model path, same as the HF cache layout
+m = JinaV5.open_files("model.onnx", "tokenizer.json")
+# precision selection does not apply here — the files are what they are
+# (reported precision reads fp32; pass FP16 files explicitly for FP16)
+```
+
+Same bytes in → same vectors out (test-pinned against HF acquisition).
+OKFgraph's `OKFRouter(model_path=..., tokenizer_path=...)` uses these (both
+or neither; missing files raise `FileNotFoundError` at construction).
 
 ## Rust: sessions without Jina
 
