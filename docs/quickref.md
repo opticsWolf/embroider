@@ -115,7 +115,7 @@ from embroider import JinaV5Vision, vision_target_size
 from PIL import Image
 import numpy as np
 
-v = JinaV5Vision.open()   # default: jina-v5-omni-nano-retrieval-vision
+v = JinaV5Vision.open("jina-v5-omni-nano-retrieval-vision")
 h, w = vision_target_size(img.height, img.width)   # contract target; anything else is rejected
 rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
 vec = v.encode_image(rgb, h, w)   # compares against text-NANO vectors only

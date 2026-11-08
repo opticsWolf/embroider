@@ -1067,7 +1067,7 @@ struct PyGemmaVision {
 #[pymethods]
 impl PyGemmaVision {
     #[staticmethod]
-    #[pyo3(signature = (model_id="google/embeddinggemma-2-vision", revision=None, cache_dir=None, truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None))]
+    #[pyo3(signature = (model_id, revision=None, cache_dir=None, truncate_dim=512, device="auto", precision=None, gpu_mem_limit=None))]
     fn open(
         model_id: &str,
         revision: Option<String>,
