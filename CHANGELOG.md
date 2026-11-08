@@ -33,8 +33,15 @@ All notable changes to `embroider` are documented here. Format follows
   CPU/CUDA and fp16 CUDA vs sentence-transformers goldens, with a
   cross-modal rank pin; fp16-on-CPU is refused (vision tower NaNs under
   emulated fp16 — fail fast like the Jina slot). Image vectors share the
-  `google/embeddinggemma-2` text space. Fixtures under
-  `fixtures/gemmavision/`, ignored `tests/gemma_vision_e2e.rs`.
+  `google/embeddinggemma-2` text space. Python surface: `GemmaVision.open`
+  (model id required — no loader carries a default id) /
+  `GemmaVision.open_files(vision_onnx, text_onnx, tokenizer)` /
+  `encode_image(rgb, h, w)` after `gemma_vision_target_size(h, w)` +
+  Pillow bicubic resize; `truncate_dim` / `device` / `precision` /
+  `gpu_mem_limit` like the Jina slot. Registry carries the entry with its
+  fp32 + fp16 tiers and `text_partner`; `available_models()` lists it.
+  Fixtures under `fixtures/gemmavision/`, ignored
+  `tests/gemma_vision_e2e.rs`.
 
 - **CUDA DLL self-service.** A freshly spawned process used to
   be at the mercy of ambient PATH when an embed session landed on CUDA:
