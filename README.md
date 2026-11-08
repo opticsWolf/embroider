@@ -28,20 +28,30 @@ CUDA probe — while owning its converter-model sessions.
 
 ## Engines
 
-| Capability | Loader (Python / Rust) | Registry ids |
-|---|---|---|
-| Text embeddings (Jina v5, Gemma 2) | `JinaV5` / `jina` | `jinaai/jina-embeddings-v5-*`, `google/embeddinggemma-2` |
-| Vision → text space (Jina, Gemma) | `JinaV5Vision`, `GemmaVision` / `vision`, `gemma` | `jina-v5-omni-nano-retrieval-vision`, `google/embeddinggemma-2-vision` |
-| Cross-encoder rerank | `Reranker` / `rerank` | `cross-encoder/ms-marco-MiniLM-L-6-v2`, `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` |
-| Typed decisions (GLiClass) | `Decider` / `decide` | `knowledgator/gliclass-small-v1.0`, `knowledgator/gliclass-v4-edge` |
-| Typed decisions (Laya markers) | `LayaDecider` / `laya` | `convaiinnovations/laya-{typed-decisions,english,multilingual}` |
-| Typed decisions (decider-2B slots) | `Decider2B` / `decider2b` | `Mapika/decider-2b` |
-| Custom models under known kinds | `register_task` / `register_model`, `load_registry_file` | caller-supplied `owner/name` ids |
+| Capability | Loader (Python / Rust) | Registry ids | Precisions |
+|---|---|---|---|
+| Text embeddings (Jina v5, Gemma 2) | `JinaV5` / `jina` | `jinaai/jina-embeddings-v5-*`, `google/embeddinggemma-2` | fp32, fp16 (nano also int8) |
+| Vision → text space (Jina, Gemma) | `JinaV5Vision`, `GemmaVision` / `vision`, `gemma` | `jina-v5-omni-nano-retrieval-vision`, `google/embeddinggemma-2-vision` | fp32, fp16 |
+| Cross-encoder rerank | `Reranker` / `rerank` | `cross-encoder/ms-marco-MiniLM-L-6-v2`, `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | fp32, q8 |
+| Typed decisions (GLiClass) | `Decider` / `decide` | `knowledgator/gliclass-small-v1.0`, `knowledgator/gliclass-v4-edge` | fp32 (v4-edge also q8) |
+| Typed decisions (Laya markers) | `LayaDecider` / `laya` | `convaiinnovations/laya-{typed-decisions,english,multilingual}` | fp32 (CUDA fp16 variants) |
+| Typed decisions (decider-2B slots) | `Decider2B` / `decider2b` | `Mapika/decider-2b` | fp32, q8 |
+| Custom models under known kinds | `register_task` / `register_model`, `load_registry_file` | caller-supplied `owner/name` ids | caller-declared, flagged-unmeasured unless validated |
 
-Full artifact repos, precisions, and licences per entry live in
-[docs/compat.md](docs/compat.md); the registry design (builtin +
-overlay, flagged-unmeasured tiers, revision pins) in
+Full artifact repos and per-entry licences live in
+[docs/compat.md](docs/compat.md) (Jina weights are non-commercial,
+EmbeddingGemma 2 and the rerank/decide entries Apache-2.0); the registry
+design (builtin + overlay, flagged-unmeasured tiers, revision pins) in
 [docs/model-registry-record.md](docs/model-registry-record.md).
+
+New models under known kinds need no source change — `register_task` /
+`register_model` or `load_registry_file("models/extra.json")` — but a new
+input contract needs a Rust loader. Rules: ids must be `owner/name`,
+builtin and duplicate ids are refused loudly, unlisted tiers fall back to
+fp32, and caller-supplied non-fp32 tiers run flagged-unmeasured (the drift
+is the caller's gate). Unknown ids fall through to the legacy path (the id
+as an HF repo holding `onnx/model.onnx`); fully local weights skip
+acquisition via `open_files`.
 
 ## Install
 
@@ -74,6 +84,19 @@ v = m.encode("what do badgers eat?", task="query")   # 512-d unit vector, golden
   registry design (builtin + overlay, revision pins).
 - [docs/model-conversion.md](docs/model-conversion.md) — the conversion
   playbook: weights to parity-gated ONNX.
+
+## Testing
+
+```bash
+cargo test --locked                      # 111 pure unit tests, no net/dylib
+```
+
+Engine parity is fixture-pinned and env-gated (`tests/*_e2e.rs`, ignored —
+needs the ORT dylib, weight files, ideally CUDA; see the Testing section in
+[quickref](docs/quickref.md)). Python parity lives with okfgraph
+(`tests/test_parity.py`, slow): Rust output against a numpy/transformers
+replication at ≤ 1e-5. Regenerate goldens only on an intentional contract
+change — a new minor version plus a re-index-everything notice.
 
 ## Failure policy
 
