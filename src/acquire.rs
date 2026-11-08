@@ -55,7 +55,7 @@ pub const EMBEDGEMMA2_FP16_REPO: &str = "opticsWolf/embeddinggemma-2-onnx-fp16";
 /// image-token positions, then the native `sentence_embedding` head).
 /// Vectors share the `EMBEDGEMMA2_MODEL` text space cross-modally.
 pub const EMBEDGEMMA2_VISION_MODEL: &str = "google/embeddinggemma-2-vision";
-/// Rerank spike ids (plan `docs/rerank-typed-decision-plan.md` §A0): the
+/// Rerank spike ids (record `docs/rerank-typed-decision-record.md` Part II): the
 /// English MiniLM-L-6 and its multilingual mMARCO sibling. Owner/name ids
 /// name the contract directly; the spec's artifacts name the file layout.
 pub const RERANK_MINILM_MODEL: &str = "cross-encoder/ms-marco-MiniLM-L-6-v2";

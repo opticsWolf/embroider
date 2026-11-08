@@ -282,7 +282,7 @@ All notable changes to `embroider` are documented here. Format follows
   `tests/decide_e2e.rs` (incl. the layout proof and validation order).
   B0 finding, recorded: single-label 3/3 correct; multi-label raw
   sigmoids systematically over-confident — not decision-ready without
-  calibration/thresholds (see `docs/typed-decision-plan.md` §8).
+  calibration/thresholds (see `docs/rerank-typed-decision-record.md` §III.8).
 
 ## [0.4.1] — 2026-10-29
 

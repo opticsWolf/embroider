@@ -323,7 +323,7 @@ torch parity 2.9e-6/7.7e-6 at pinned revisions) with the ignored
 irrelevant ordering. Precision notes from the spike: fp16 rejected
 (slower + drift), int8 gated on a wider harness, CUDA opportunistic
 (~1.5x at batch, worse at b1) — see
-docs/[rerank-typed-decision-plan.md](docs/rerank-typed-decision-plan.md).
+docs/[rerank-typed-decision-record.md](docs/rerank-typed-decision-record.md).
 
 ## Decide
 
