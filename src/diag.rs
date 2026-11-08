@@ -628,6 +628,7 @@ mod tests {
 
     #[test]
     fn prepare_cuda_dirs_delivers_the_venv_ort_dylib() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let root = std::env::temp_dir().join("embroider-ort-dist-test");
         let capi = root.join("Lib").join("site-packages").join("onnxruntime_gpu")
             .join("capi");
