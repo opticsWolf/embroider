@@ -224,7 +224,7 @@ let prec = embroider::Precision::parse("fp16")?;
 let landed = prec.resolve(used_cuda);
 let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-link" href="https://docs.rs/embroider">API docs <span aria-hidden="true">↗</span></a></article>
     <article><h3>Consumers for graphs</h3><p>OKFgraph pins the text + vision contracts and vendors the goldens; bobine pins the session policy for converter models. The compat matrix records which trio shipped together — and why a newer embroider minor without an OKFgraph update stays supported.</p><pre tabindex="0" aria-label="Consumer pins"><code>embroider = "0.14"  # shared ORT plumbing, Jina + Gemma engines
-# okfgraph 0.11.x + pins ↔ embroider 0.13.x ↔ ORT 1.31.1
+# okfgraph 0.11.x + pins ↔ embroider 0.14.x ↔ ORT 1.31.1
 # okfgraph 0.10.x ↔ embroider 0.3.x ↔ ORT 1.29.0
 # okfgraph 0.8.x ↔ embroider 0.3.x ↔ ORT 1.29.0
 # okfgraph 0.7.x ↔ embroider 0.2.x ↔ ORT 1.29.0</code></pre><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">Compatibility <span aria-hidden="true">↗</span></a></article>
