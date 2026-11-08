@@ -1,6 +1,6 @@
 # Model registry surface — draft
 
-Status: **shipped in 0.12.0** (layer 1 + revision pins; layer 2 deferred as designed). Problem: every model is a
+Status: **shipped in 0.12.0** (layer 1 + revision pins; layer 2 deferred as designed). **Status 2026-11-07:** verified against the tree — every element below is in `src/acquire.rs` / `src/lib.rs` with unit cover, including the revision-completeness test (every builtin fp32 pinned) and the overlay-aware `resolve_model` path shared by all loaders (Jina text/vision, Gemma text/vision, rerank, decide, Laya, Decider-2B). Layer 2 (`TaskLoader`) still absent by design. The problem statement below is the pre-0.12.0 record, kept verbatim. Problem: every model is a
 `pub const` in `src/acquire.rs` (`TEXT_SMALL`, `RERANK_MINILM`,
 `GLICLASS_SMALL`, …) with `&'static` fields; `lookup_model` /
 `lookup_task` search the builtin slices only. Unknown ids get the
@@ -308,6 +308,12 @@ builtins included.
 ## Questions for the maintainer
 
 1. Shadowing: refuse (draft) vs allow-behind-a-flag (mirror override)?
+   — **Decided 0.12.0 as drafted: refuse.** Registering a builtin or
+   already-registered id errors (`already registered`); mirrors take
+   their own ids (`opticsWolf/…-q8-onnx` convention).
 2. File loading: env var, explicit call, or both (draft says both)?
+   — **Decided 0.12.0 as drafted: both.** `load_registry_file(path)`
+   plus `EMBROIDER_REGISTRY_FILE` env (no auto-discovery, no cwd
+   sniffing).
 3. ~~Unmeasured tiers~~ — decided: flagged-allow (§above).
 4. ~~Builtin revision pins~~ — decided: yes (§above).
