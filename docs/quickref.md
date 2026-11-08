@@ -329,7 +329,7 @@ new minor version + re-index-everything notice.
 ## Testing
 
 ```bash
-cargo test --locked                      # 106 pure unit tests (no net/dylib)
+cargo test --locked                      # 111 pure unit tests (no net/dylib)
 # vision e2e (ignored): needs ORT 1.31 dylib + weight files + CUDA ideally
 ORT_DYLIB_PATH=.../onnxruntime.dll VISION_E2E_FP32=.../model.onnx \
   VISION_E2E_FP16=.../model.onnx VISION_E2E_TOK=.../tokenizer.json \

@@ -69,7 +69,7 @@ Rules:
   Apache-2.0, labels-first recipe `labels + [SEP] + prompt? + state`,
   2048 ceiling, fp32 + q8 (weight-only; the dynamic-int8 route drifts 5.5 and stays rejected) and is
   rejected). Its graph embeds the held-out-fitted calibrator, so its
-  golden (`fixtures/golden_decide_gliclass_v4edge.json`, ORT 1.29.0
+  golden (`fixtures/golden_decide_gliclass_v4edge.json`, ORT 1.29.0, still green on 1.31.1
   CPU) pins ORT values at a 0.03 tolerance, not 1e-6.
 - **Laya marker layout (0.7.0)**: `LayaDecider` (`src/laya.rs`, Python
   `embroider.LayaDecider`) serving the three registered

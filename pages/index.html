@@ -4,17 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b0a13">
-  <title>embroider — frozen Jina v5 embeddings over ONNX Runtime</title>
-  <meta name="description" content="Jina v5 text and image embeddings served through ONNX Runtime from a Rust core, with Python bindings. One frozen vector-space contract, shared session policy, no torch in the hot path.">
+  <title>embroider — frozen embeddings (Jina v5 + Gemma 2) over ONNX Runtime</title>
+  <meta name="description" content="Text and image embeddings (Jina v5, EmbeddingGemma 2) served through ONNX Runtime from a Rust core, with Python bindings. One frozen vector-space contract per model, shared session policy, no torch in the hot path.">
   <link rel="preload" href="fonts/space-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="style.css?v=embroider-13">
+  <link rel="stylesheet" href="style.css?v=embroider-14">
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
 <nav class="top" aria-label="Main navigation">
   <a class="brand" href="#top">
     <svg class="mark" viewBox="0 0 28 28" fill="none" aria-hidden="true"><path d="M6 7 21 5 23 21 7 23 6 7Zm0 0 17 14M21 5 7 23" stroke="currentColor" stroke-width="1.5"/><g fill="currentColor"><circle cx="6" cy="7" r="3"/><circle cx="21" cy="5" r="3"/><circle cx="23" cy="21" r="3"/><circle cx="7" cy="23" r="3"/></g></svg>
-    embroider <span class="release">0.12.1</span>
+    embroider <span class="release">0.13.1</span>
   </a>
   <div class="links">
     <a href="#positioning">Why embroider</a>
@@ -34,8 +34,8 @@
   </svg>
   <div class="hero-copy">
     <h1>Frozen vectors.<br><span>Local inference.</span></h1>
-    <p class="sub">Jina v5 text <strong>and image</strong> embeddings over ONNX Runtime — a Rust core with Python bindings, and <strong>one contract every consumer shares</strong>.</p>
-    <p class="hero-detail">embroider turns text and images into vectors: task prefix → tokenize → ONNX forward → last-token pooling → L2 → Matryoshka truncate → re-normalise. No torch, transformers, or optimum in the hot path, so every vector in an index stays directly comparable — or the encode fails loudly instead of silently forking the space.</p>
+    <p class="sub">Text <strong>and image</strong> embeddings over ONNX Runtime — Jina v5 plus Apache-2.0 EmbeddingGemma 2 — a Rust core with Python bindings, and <strong>one contract per model every consumer shares</strong>.</p>
+    <p class="hero-detail">embroider turns text and images into vectors: task prefix → tokenize → ONNX forward → pooling → L2 → Matryoshka truncate → re-normalise. Jina ids pool the last token with <code>Query:</code>/<code>Document:</code> prefixes; EmbeddingGemma 2 mean-pools with Gemma prompts; the vision slots fuse a tower in-graph. No torch, transformers, or optimum in the hot path, so every vector in an index stays directly comparable — or the encode fails loudly instead of silently forking the space.</p>
     <div class="cta">
       <a class="btn" href="#workflow">Embed your first text <span aria-hidden="true">↓</span></a>
       <a class="text-link" href="https://github.com/opticsWolf/embroider#what-it-is">Read the documentation <span aria-hidden="true">↗</span></a>
@@ -57,7 +57,7 @@ v = m.<span class="syntax-link">encode</span>(<span class="syntax-muted">"what d
     <p class="preview-caption">Illustrative session · weights download once, then reuse the cache.</p>
   </figure>
   <ul class="principles" aria-label="At a glance">
-    <li>Jina v5 text + vision</li><li>ONNX Runtime only</li><li>Golden-pinned contract</li><li>Rust core · Python wheels</li>
+    <li>Jina v5 + Gemma 2 text &amp; vision</li><li>ONNX Runtime only</li><li>Golden-pinned contract</li><li>Rust core · Python wheels</li>
   </ul>
 </header>
 
@@ -66,8 +66,8 @@ v = m.<span class="syntax-link">encode</span>(<span class="syntax-muted">"what d
   <div class="section-intro">
     <h2 id="positioning-title">Keep the space.<br>Lose the framework.</h2>
     <div class="prose">
-      <p>Embedding pipelines drift when every consumer brings its own tokenizer, pooling, prefix, and runtime. embroider freezes the whole chain in one Rust engine: the task prefix is load-bearing (<code>query</code> ↔ <code>Query:</code>, <code>document</code> ↔ <code>Document:</code>), pooling reads the last attended token, and Matryoshka truncation follows a fixed ladder — then the vector is re-normalised.</p>
-      <p>Two consumers share it differently. <strong>OKFgraph</strong> uses the full Jina v5 text + vision contract for its graph. <strong>bobine</strong> reuses only the ONNX plumbing — session policy, provider fallback, CUDA probe — while owning its own converter-model sessions. Sharing runtime policy never means sharing one global inference session.</p>
+      <p>Embedding pipelines drift when every consumer brings its own tokenizer, pooling, prefix, and runtime. embroider freezes the whole chain in one Rust engine: the task prefix is load-bearing and per-model — Jina maps <code>query</code> ↔ <code>Query:</code> / <code>document</code> ↔ <code>Document:</code> with last-token pooling, EmbeddingGemma 2 maps the same tasks onto Gemma prompts with mean pooling — and Matryoshka truncation follows a fixed ladder, then the vector is re-normalised.</p>
+      <p>Two consumers share it differently. <strong>OKFgraph</strong> uses the text + vision contracts (Jina v5, now EmbeddingGemma 2) for its graph. <strong>bobine</strong> reuses only the ONNX plumbing — session policy, provider fallback, CUDA probe — while owning its own converter-model sessions. Sharing runtime policy never means sharing one global inference session.</p>
     </div>
   </div>
   <ol class="flow" aria-label="Embedding contract">
@@ -101,13 +101,15 @@ v = m.<span class="syntax-link">encode</span>(<span class="syntax-muted">"what d
   </div>
   <div class="setup">
     <div><h3>Install the wheel</h3><p>Linux / Windows / macOS-arm64 wheels for Python 3.11–3.13. Exactly one ONNX Runtime alongside: CPU or GPU, never both — they share a module name and clobber each other.</p><pre tabindex="0" aria-label="Installation commands"><code>pip install embroider
-pip install onnxruntime==1.29.0
+pip install onnxruntime==1.31.1
 
 # Override discovery only when needed:
 # export ORT_DYLIB_PATH=/path/to/onnxruntime.dll</code></pre></div>
-    <div><h3>Registry at a glance</h3><pre tabindex="0" aria-label="Model registry"><code># small-retrieval (default): fp32 + fp16 mirror
+    <div><h3>Registry at a glance</h3><pre tabindex="0" aria-label="Model registry"><code># small-retrieval (canonical): fp32 + fp16 mirror
 # nano-retrieval: fp32 / fp16 / int8 (vision partner)
 # omni-nano vision: fp32 / fp16 → text-nano space
+# embeddinggemma-2 (Apache-2.0): fp32 + fp16 mirror, MRL ladder
+# embeddinggemma-2-vision: fp32 / fp16 → Gemma text space
 from embroider import available_models
 available_models()</code></pre><p class="small-copy">Unknown ids fall through to the legacy path: the id is treated as an HF repo holding <code>onnx/model.onnx</code>. Fully local weights skip acquisition via <code>open_files</code>.</p></div>
   </div>
@@ -137,7 +139,7 @@ m.count_tokens("long text...")  # session max_length applies</code></pre></div>
 from PIL import Image
 import numpy as np
 
-v = JinaV5Vision.open()  # omni-nano vision, auto precision
+v = JinaV5Vision.open("jina-v5-omni-nano-retrieval-vision")  # auto precision
 h, w = vision_target_size(img.height, img.width)
 rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
 vec = v.encode_image(rgb, h, w)</code></pre></div>
@@ -159,9 +161,9 @@ m = JinaV5.open_files("model.onnx", "tokenizer.json")</code></pre></div>
     </article>
     <article class="step">
       <div class="step-copy"><span class="step-no">5</span><h3>Prove the space, tune the run.</h3><p>Assert live vectors against the vendored goldens before trusting an index. Then tune the run, not the space: <code>cpu_arena=False</code> cuts peak RSS ~8× for ~1.4× encode time on FP32, and Level3 / intra = physical-cores/2 / inter = 1 stays because it measured fastest. Re-measure on new hardware or ORT before changing policy.</p></div>
-      <div class="example"><span class="example-label">Conformance and tests</span><pre tabindex="0" aria-label="Testing commands"><code>cargo test --locked   # 49 pure unit tests, no net/dylib
+      <div class="example"><span class="example-label">Conformance and tests</span><pre tabindex="0" aria-label="Testing commands"><code>cargo test --locked   # 111 pure unit tests, no net/dylib
 
-# vision e2e (ignored): ORT 1.29 dylib + weights + CUDA
+# vision e2e (ignored): ORT 1.31 dylib + weights + CUDA
 ORT_DYLIB_PATH=.../onnxruntime.dll \
   VISION_E2E_FP32=.../model.onnx \
   VISION_E2E_FP16=.../model.onnx \
@@ -175,8 +177,8 @@ ORT_DYLIB_PATH=.../onnxruntime.dll \
 <section id="features" aria-labelledby="features-title">
   <div class="section-intro"><h2 id="features-title">Small surface,<br>explicit behaviour.</h2><div class="prose"><p>embroider owns session tuning, provider fallback, the CUDA probe, dylib reporting, and <code>owner/name</code> parsing. Consumers own model fetch, preprocessing, IO wiring, and decoding. The seam is deliberate — and documented with a recipe, not just a rule.</p></div></div>
   <div class="feat-grid">
-    <article><h3>Frozen Jina v5 text space</h3><p>Prefix → tokenize → forward → last-token pooling → L2 → Matryoshka truncate → re-normalise. Session IO is discovered at load; <code>token_type_ids</code> feeds only when declared, output prefers <code>last_hidden_state</code>.</p></article>
-    <article><h3>Vision into text-nano space</h3><p>One image per call over the dynamic-grid graph; host grid tensors are bit-identical to transformers and fixture-pinned. Every encode re-checks <code>seq == image_tokens + 15</code> so a wrong tokenizer fails loudly.</p></article>
+    <article><h3>Frozen text spaces, per model</h3><p>Jina: prefix → tokenize → forward → last-token pooling → L2 → Matryoshka truncate → re-normalise. Gemma 2: Gemma prompts → mean pooling over the native sentence embedding. Session IO is discovered at load; cross-modal image vectors share the text space.</p></article>
+    <article><h3>Vision into text space</h3><p>Jina: one image per call over the dynamic-grid graph (bit-identical host grid tensors, fixture-pinned). Gemma 2: tower + text-tower fusion with host patch math verified at cos 1.0. One image per call, wrong resolutions rejected loudly.</p></article>
     <article><h3>Precision that follows the device</h3><p><code>auto</code> resolves after landing: CUDA → FP16, CPU → FP32. Explicit fp16-on-CPU warns for text and errors for vision. Nano alone offers explicit int8 — never automatic, never mixed into one index.</p></article>
     <article><h3>Memory policy with measurements</h3><p>CPU arena off by default (15.3 → 1.9 GB peak on FP32 for ~1.4× time). Text tuning is Level3 with intra = physical-cores/2, kept because it measured fastest on a 32-logical-core Windows box.</p></article>
     <article><h3>Reuse without Jina</h3><p>bobine builds converter sessions from <code>SessionPolicy::ort_defaults()</code> + <code>apply_providers</code> + <code>cuda_available()</code> + <code>report()</code> — never touching <code>JinaV5</code>. Generic fetch helpers remain a natural, additive future.</p></article>
@@ -221,8 +223,8 @@ v = m.encode("hello", task="document")</code></pre><a class="text-link" href="ht
 let prec = embroider::Precision::parse("fp16")?;
 let landed = prec.resolve(used_cuda);
 let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-link" href="https://docs.rs/embroider">API docs <span aria-hidden="true">↗</span></a></article>
-    <article><h3>Consumers for graphs</h3><p>OKFgraph pins the text + vision contract and vendors the goldens; bobine pins the session policy for converter models. The compat matrix records which trio shipped together — and why a newer embroider minor without an OKFgraph update stays supported.</p><pre tabindex="0" aria-label="Consumer pins"><code>embroider = "0.12"  # shared ORT plumbing
-# okfgraph 0.11.0 ↔ embroider 0.12.x ↔ ORT 1.29.0
+    <article><h3>Consumers for graphs</h3><p>OKFgraph pins the text + vision contracts and vendors the goldens; bobine pins the session policy for converter models. The compat matrix records which trio shipped together — and why a newer embroider minor without an OKFgraph update stays supported.</p><pre tabindex="0" aria-label="Consumer pins"><code>embroider = "0.13"  # shared ORT plumbing, Jina + Gemma engines
+# okfgraph 0.11.x + pins ↔ embroider 0.13.x ↔ ORT 1.31.1
 # okfgraph 0.10.x ↔ embroider 0.3.x ↔ ORT 1.29.0
 # okfgraph 0.8.x ↔ embroider 0.3.x ↔ ORT 1.29.0
 # okfgraph 0.7.x ↔ embroider 0.2.x ↔ ORT 1.29.0</code></pre><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">Compatibility <span aria-hidden="true">↗</span></a></article>
@@ -242,13 +244,13 @@ let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-
   <div class="table-wrap" tabindex="0" role="region" aria-label="Package versions"><table><caption>Published stack</caption><thead><tr><th scope="col">Responsibility</th><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
     <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.11.0</td></tr>
     <tr><th scope="row">PDF / Office conversion</th><td><a href="https://pypi.org/project/bobine/">bobine</a></td><td>0.7.5</td></tr>
-    <tr><th scope="row">Embeddings + rerank + decisions · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.12.1</td></tr>
-    <tr><th scope="row">Inference runtime (CPU or GPU)</th><td>onnxruntime</td><td>1.29.0</td></tr>
+    <tr><th scope="row">Embeddings + rerank + decisions · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.13.1</td></tr>
+    <tr><th scope="row">Inference runtime (CPU or GPU)</th><td>onnxruntime</td><td>1.31.1</td></tr>
   </tbody></table></div>
-  <aside class="note"><h3>Open code. Separately licensed weights.</h3><p>embroider's code is MIT OR Apache-2.0. Embedding and vision weights are CC BY-NC 4.0 (non-commercial, including the FP16 mirror and the vision export); the rerank task entries are Apache-2.0. Review the <a href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">licence table</a> before commercial use or redistribution.</p></aside>
+  <aside class="note"><h3>Open code. Separately licensed weights.</h3><p>embroider's code is MIT OR Apache-2.0. Jina embedding and vision weights are CC BY-NC 4.0 (non-commercial, including the FP16 mirror and the vision export); EmbeddingGemma 2 weights and the rerank/decide task entries are Apache-2.0. Review the <a href="https://github.com/opticsWolf/embroider/blob/main/docs/compat.md">licence table</a> before commercial use or redistribution.</p></aside>
 </section>
 
-<section class="closing" aria-labelledby="closing-title"><h2 id="closing-title">Start with one encode<br>you can trust.</h2><p>Open the default model, encode a query and a document, assert the goldens. Then hand the vectors to a graph — or the policy to your own model.</p><div class="cta"><a class="btn" href="#workflow">Follow the workflow <span aria-hidden="true">↑</span></a><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/quickref.md">Explore the quick reference <span aria-hidden="true">↗</span></a></div></section>
+<section class="closing" aria-labelledby="closing-title"><h2 id="closing-title">Start with one encode<br>you can trust.</h2><p>Open a registry model, encode a query and a document, assert the goldens. Then hand the vectors to a graph — or the policy to your own model.</p><div class="cta"><a class="btn" href="#workflow">Follow the workflow <span aria-hidden="true">↑</span></a><a class="text-link" href="https://github.com/opticsWolf/embroider/blob/main/docs/quickref.md">Explore the quick reference <span aria-hidden="true">↗</span></a></div></section>
 </main>
 <footer><a class="brand" href="#top">embroider</a><p>Frozen vectors, local inference.</p><div><a href="https://github.com/opticsWolf/embroider">Source</a><a href="https://github.com/opticsWolf/embroider#what-it-is">Documentation</a><a href="https://pypi.org/project/embroider/">PyPI</a><a href="https://crates.io/crates/embroider">crates.io</a><a href="https://opticswolf.github.io/OKFgraph/">OKFgraph</a><a href="https://opticswolf.github.io/bobine/">bobine</a></div></footer>
 </body>

@@ -639,7 +639,7 @@ backs the ignored end-to-end parity test.
 
 ## Testing
 
-- **Rust unit tests** (106, pure — no network, no dylib, no tokenizer
+- **Rust unit tests** (111, pure — no network, no dylib, no tokenizer
   file): device/precision parsing, precision-follows-device resolution,
   FP16 repo selection, model-id parsing, provider-matrix mapping,
   task-prefix idempotence, the L2 → truncate → re-normalise math,

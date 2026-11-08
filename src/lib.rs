@@ -1,4 +1,4 @@
-//! Embroider — Jina v5 text embeddings through ONNX Runtime.
+//! Embroider — text + vision embeddings (Jina v5, EmbeddingGemma 2) through ONNX Runtime.
 //!
 //! Rust core with opt-in PyO3 bindings (the bobine pattern). The crate
 //! layering: [`providers`]/[`probe`]/[`policy`]/[`acquire`]/[`error`]/[`diag`]
