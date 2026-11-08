@@ -134,15 +134,21 @@ m.precision()    # effective weights
 m.count_tokens("long text...")  # session max_length applies</code></pre></div>
     </article>
     <article class="step">
-      <div class="step-copy"><span class="step-no">3</span><h3>Add vision where it belongs.</h3><p>Image bytes land in the text-nano space — the registry's <code>text_partner</code> pin refuses anything else. Resize on the caller side to exactly <code>vision_target_size(h, w)</code> with Pillow bicubic; anything else is rejected rather than embedded under the wrong resolution contract. Explicit fp16-on-CPU is an error here: the graph stalls on CPU, so fail-fast beats a hung batch.</p></div>
-      <div class="example"><span class="example-label">Image into text-nano space</span><pre tabindex="0" aria-label="Vision commands"><code>from embroider import JinaV5Vision, vision_target_size
+      <div class="step-copy"><span class="step-no">3</span><h3>Add vision where it belongs.</h3><p>Each vision slot fuses its tower with a text tower and lands image bytes in that text space — Jina vision into text-nano, Gemma vision into the Gemma text space — and the registry's <code>text_partner</code> pin refuses any other pairing. Resize on the caller side to exactly the slot's target size with Pillow bicubic (<code>vision_target_size</code> for Jina, <code>gemma_vision_target_size</code> for Gemma); anything else is rejected rather than embedded under the wrong resolution contract. Explicit fp16-on-CPU is an error in both slots: fail-fast beats a stalled batch or silent NaNs.</p></div>
+      <div class="example"><span class="example-label">Images into text space</span><pre tabindex="0" aria-label="Vision commands"><code>from embroider import JinaV5Vision, vision_target_size
+from embroider import GemmaVision, gemma_vision_target_size
 from PIL import Image
 import numpy as np
 
-v = JinaV5Vision.open("jina-v5-omni-nano-retrieval-vision")  # auto precision
+v = JinaV5Vision.open("jina-v5-omni-nano-retrieval-vision")
 h, w = vision_target_size(img.height, img.width)
 rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
-vec = v.encode_image(rgb, h, w)</code></pre></div>
+vec = v.encode_image(rgb, h, w)
+
+g = GemmaVision.open("google/embeddinggemma-2-vision")
+h, w = gemma_vision_target_size(img.height, img.width)
+rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
+vec = g.encode_image(rgb, h, w)  # cross-modal with Gemma text</code></pre></div>
     </article>
     <article class="step">
       <div class="step-copy"><span class="step-no">4</span><h3>Stay cold when you only count.</h3><p><code>JinaTokenizer.open</code> fetches only <code>tokenizer.json</code> — about half a second cold, roughly 9× cheaper than a session open — and never truncates, so counts report true length. <code>cache_info</code> answers the pre-flight question — is this model already cached, and where? — offline only: no download, no session, no device probe (<code>precision=None</code> reads fp32). <code>open_files</code> variants skip every download for air-gapped runs; the ONNX sidecar must sit next to the model file, as in the HF cache layout.</p></div>
@@ -179,6 +185,7 @@ ORT_DYLIB_PATH=.../onnxruntime.dll \
   <div class="feat-grid">
     <article><h3>Frozen text spaces, per model</h3><p>Jina: prefix → tokenize → forward → last-token pooling → L2 → Matryoshka truncate → re-normalise. Gemma 2: Gemma prompts → mean pooling over the native sentence embedding. Session IO is discovered at load; cross-modal image vectors share the text space.</p></article>
     <article><h3>Vision into text space</h3><p>Jina: one image per call over the dynamic-grid graph (bit-identical host grid tensors, fixture-pinned). Gemma 2: tower + text-tower fusion with host patch math verified at cos 1.0. One image per call, wrong resolutions rejected loudly.</p></article>
+    <article><h3>Rerank + typed decisions</h3><p>Cross-encoder rerankers (MiniLM, mMARCO) score query–document pairs; typed gates (GLiClass, Laya, Decider 2B) return Choice, Score, or Noul verdicts with calibration. Same ORT plumbing, same golden-pinned posture, same fail-fast contract.</p></article>
     <article><h3>Precision that follows the device</h3><p><code>auto</code> resolves after landing: CUDA → FP16, CPU → FP32. Explicit fp16-on-CPU warns for text and errors for vision. Nano alone offers explicit int8 — never automatic, never mixed into one index.</p></article>
     <article><h3>Memory policy with measurements</h3><p>CPU arena off by default (15.3 → 1.9 GB peak on FP32 for ~1.4× time). Text tuning is Level3 with intra = physical-cores/2, kept because it measured fastest on a 32-logical-core Windows box.</p></article>
     <article><h3>Reuse without Jina</h3><p>bobine builds converter sessions from <code>SessionPolicy::ort_defaults()</code> + <code>apply_providers</code> + <code>cuda_available()</code> + <code>report()</code> — never touching <code>JinaV5</code>. Generic fetch helpers remain a natural, additive future.</p></article>
