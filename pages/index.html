@@ -152,10 +152,10 @@ rgb = np.asarray(img.resize((w, h), Image.BICUBIC)).tobytes()
 vec = g.encode_image(rgb, h, w)  # cross-modal with Gemma text</code></pre></div>
     </article>
     <article class="step">
-      <div class="step-copy"><span class="step-no">4</span><h3>Stay cold when you only count.</h3><p><code>JinaTokenizer.open</code> fetches only <code>tokenizer.json</code> — about half a second cold, roughly 9× cheaper than a session open — and never truncates, so counts report true length. <code>cache_info</code> answers the pre-flight question — is this model already cached, and where? — offline only: no download, no session, no device probe (<code>precision=None</code> reads fp32). <code>open_files</code> variants skip every download for air-gapped runs; the ONNX sidecar must sit next to the model file, as in the HF cache layout.</p></div>
-      <div class="example"><span class="example-label">Counts and local files</span><pre tabindex="0" aria-label="Tokenizer commands"><code>from embroider import JinaTokenizer, cache_info
+      <div class="step-copy"><span class="step-no">4</span><h3>Stay cold when you only count.</h3><p><code>Tokenizer.open</code> fetches only <code>tokenizer.json</code> — about half a second cold, roughly 9× cheaper than a session open — and never truncates, so counts report true length. <code>cache_info</code> answers the pre-flight question — is this model already cached, and where? — offline only: no download, no session, no device probe (<code>precision=None</code> reads fp32). <code>open_files</code> variants skip every download for air-gapped runs; the ONNX sidecar must sit next to the model file, as in the HF cache layout.</p></div>
+      <div class="example"><span class="example-label">Counts and local files</span><pre tabindex="0" aria-label="Tokenizer commands"><code>from embroider import Tokenizer, cache_info
 
-t = JinaTokenizer.open(
+t = Tokenizer.open(
   "jinaai/jina-embeddings-v5-text-small-retrieval")
 t.count_tokens("...")  # true length, never truncated
 

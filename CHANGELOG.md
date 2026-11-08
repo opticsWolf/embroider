@@ -5,6 +5,14 @@ All notable changes to `embroider` are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- General `Tokenizer` loader (`embroider.Tokenizer`, same `open` /
+  `open_files` / `count_tokens` seam): the handle was never Jina-specific
+  — it serves Gemma tokenizers too (verified byte-identical to the
+  export's). `JinaTokenizer` still resolves, with a `DeprecationWarning`
+  pointing at the new name; remove in a later minor once consumers
+  migrate.
+
 ### Fixed
 - Flaky `prepare_cuda_dirs_prepends_nvidia_pip_bin_dirs`: the sibling
   venv-dylib test touched `PATH`/`ORT_DYLIB_PATH` without holding the

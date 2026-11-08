@@ -212,14 +212,14 @@ impl PyJinaV5 {
 }
 
 #[cfg(feature = "extension-module")]
-#[pyclass(name = "JinaTokenizer")]
-struct PyJinaTokenizer {
+#[pyclass(name = "Tokenizer")]
+struct PyTokenizer {
     inner: TokenizerHandle,
 }
 
 #[cfg(feature = "extension-module")]
 #[pymethods]
-impl PyJinaTokenizer {
+impl PyTokenizer {
     #[staticmethod]
     #[pyo3(signature = (model_id, revision=None, cache_dir=None))]
     fn open(
@@ -1761,6 +1761,26 @@ fn prepare_cuda_runtime_py(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyA
     value_to_py(py, &diag::prepare_cuda_dirs(venv.as_deref()))
 }
 
+/// Module-level fallback (PEP 562): keeps the old `JinaTokenizer` name
+/// working after the rename to `Tokenizer`. Warns instead of silently
+/// aliasing so consumers migrate; remove in a later minor.
+#[cfg(feature = "extension-module")]
+#[pyfunction]
+fn __getattr__(py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+    if name == "JinaTokenizer" {
+        pyo3::PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyDeprecationWarning>(),
+            c"embroider.JinaTokenizer is deprecated; use embroider.Tokenizer (works for every tokenizer, not just Jina)",
+            1,
+        )?;
+        return Ok(py.get_type::<PyTokenizer>().into_any().unbind());
+    }
+    Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+        "module 'embroider' has no attribute '{name}'"
+    )))
+}
+
 #[cfg(feature = "extension-module")]
 #[pymodule]
 fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1775,7 +1795,11 @@ fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         .and_then(|p| p.extract().ok());
     diag::note_venv_prefix(std::env::var("VIRTUAL_ENV").ok().or(prefix));
     m.add_class::<PyJinaV5>()?;
-    m.add_class::<PyJinaTokenizer>()?;
+    m.add_class::<PyTokenizer>()?;
+    // Deprecated alias kept working: `JinaTokenizer` resolves through the
+    // module `__getattr__` below with a DeprecationWarning. Remove in a
+    // later minor once consumers (okfgraph router/tests) have migrated.
+    m.add_function(pyo3::wrap_pyfunction!(__getattr__, m)?)?;
     m.add_class::<PyReranker>()?;
     m.add_class::<PyDecider>()?;
     m.add_class::<PyLayaDecider>()?;
