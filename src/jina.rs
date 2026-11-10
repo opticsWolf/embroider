@@ -244,6 +244,17 @@ impl TokenizerHandle {
     pub fn count_tokens(&self, text: &str) -> Result<usize> {
         count_tokens_in(&self.tokenizer, text)
     }
+
+    /// Token ids for `text`, encoded exactly as [`Self::count_tokens`]
+    /// counts them (no special tokens), so `ids.len()` is the count.
+    pub fn encode_ids(&self, text: &str) -> Result<Vec<u32>> {
+        Ok(self
+            .tokenizer
+            .encode(text, false)
+            .map_err(|e| anyhow!("tokenization failed: {e}"))?
+            .get_ids()
+            .to_vec())
+    }
 }
 
 /// An opened session plus its discovered contract: the expensive,
@@ -351,7 +362,9 @@ impl JinaV5 {
         // `build_session` re-resolves for free.)
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = precision.resolve(used_cuda);
-        if precision == Precision::Fp16 && !used_cuda {
+        if precision == Precision::Fp16 && !used_cuda
+            && crate::acquire::model_artifact_precision(model_id, precision) == Precision::Fp16
+        {
             eprintln!(
                 "embroider: FP16 weights on CPU — this runs >40x slower than FP32-CPU \
                  (emulated half-precision kernels). Explicit request honoured; pass \
@@ -361,6 +374,7 @@ impl JinaV5 {
         // Precision selects the acquisition artifact from the registry.
         // Unknown ids take the legacy path (id = fp32 repo, default file).
         let artifact = artifact_for(model_id, precision);
+        let precision = crate::acquire::model_artifact_precision(model_id, precision);
         // Caller revision wins; otherwise the tier pin.
         let rev = revision.map(str::to_string).or(artifact.revision.clone());
 

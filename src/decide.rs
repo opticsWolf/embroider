@@ -223,7 +223,9 @@ impl Decider {
         // follows the device the session will actually land on.
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = precision.resolve(used_cuda);
-        if precision == Precision::Fp16 && !used_cuda {
+        if precision == Precision::Fp16 && !used_cuda
+            && crate::acquire::task_artifact_precision(model_id, precision) == Precision::Fp16
+        {
             eprintln!(
                 "embroider: FP16 weights on CPU — this runs >40x slower than FP32-CPU \
                  (emulated half-precision kernels). Explicit request honoured; pass \
@@ -233,6 +235,7 @@ impl Decider {
         // Precision selects the acquisition artifact from the task registry.
         // Unknown ids take the legacy path (id = fp32 repo, default file).
         let artifact = artifact_for_task(model_id, precision);
+        let precision = crate::acquire::task_artifact_precision(model_id, precision);
         if let Some(spec) = resolve_task(model_id) {
             warn_if_unmeasured_task(&spec, model_id, precision);
         }

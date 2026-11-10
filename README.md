@@ -79,6 +79,8 @@ v = m.encode("what do badgers eat?", task="query")   # 512-d unit vector, golden
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how it works: module
   layout, session policy and measurements, runtime discovery, the
   frozen-contract rules, registry and precision design, conformance.
+- [docs/serve.md](docs/serve.md) — `python -m embroider.serve`: one model
+  of any kind over HTTP, its routes, and the `space` identity (0.15).
 - [docs/compat.md](docs/compat.md) — release matrix, model sizes and
   serving guidance, per-entry licences.
 - [docs/rerank-typed-decision-record.md](docs/rerank-typed-decision-record.md) —

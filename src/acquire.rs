@@ -1194,6 +1194,43 @@ pub fn artifact_for(model_id: &str, precision: Precision) -> ResolvedArtifact {
     }
 }
 
+/// The precision of the weights [`artifact_for_task`] selects: the
+/// request when the spec ships that tier, `Fp32` when it fell back.
+/// Unknown ids (legacy layout) keep the request. `Auto` must already be
+/// resolved, as for `artifact_for_task`.
+pub fn task_artifact_precision(model_id: &str, precision: Precision) -> Precision {
+    match resolve_task(model_id) {
+        Some(spec) => {
+            let shipped = match precision {
+                Precision::Fp16 => spec.fp16.is_some(),
+                Precision::Int8 => spec.int8.is_some(),
+                Precision::Q8 => spec.q8.is_some(),
+                _ => true,
+            };
+            if shipped { precision } else { Precision::Fp32 }
+        }
+        None => precision,
+    }
+}
+
+/// The precision of the weights [`artifact_for`] selects, same rule as
+/// [`task_artifact_precision`] (embed specs ship no q8 tier, so q8 lands
+/// on the fp32 artifact).
+pub fn model_artifact_precision(model_id: &str, precision: Precision) -> Precision {
+    match resolve_model(model_id) {
+        Some(spec) => {
+            let shipped = match precision {
+                Precision::Fp16 => spec.fp16.is_some(),
+                Precision::Int8 => spec.int8.is_some(),
+                Precision::Q8 => false,
+                _ => true,
+            };
+            if shipped { precision } else { Precision::Fp32 }
+        }
+        None => precision,
+    }
+}
+
 /// Legacy repo-only selection (frozen contract: only the default id maps
 /// to the FP16 mirror; everything else is the identity). Prefer
 /// `artifact_for`, which additionally resolves the in-repo file layout
@@ -1637,6 +1674,11 @@ mod tests {
         for p in [Precision::Fp16, Precision::Int8, Precision::Auto] {
             let a = artifact_for_task(RERANK_MMARCO_MODEL, p);
             assert_eq!((a.repo.as_str(), a.file.as_str()), (RERANK_MMARCO_MODEL, "onnx/model.onnx"));
+            // ...and report the fp32 they loaded, not the request (auto
+            // is resolved before either call, never passed in).
+            if p != Precision::Auto {
+                assert_eq!(task_artifact_precision(RERANK_MMARCO_MODEL, p), Precision::Fp32);
+            }
         }
         // Unknown ids take the legacy layout.
         assert!(lookup_task("someone/custom-embed").is_none());
@@ -1653,6 +1695,24 @@ mod tests {
         assert_eq!((fp32.repo.as_str(), fp32.file.as_str()), (GLICLASS_SMALL_MODEL, "onnx/model.onnx"));
         assert_eq!(TaskKind::Rerank.as_str(), "rerank");
         assert_eq!(TaskKind::Decide.as_str(), "decide");
+    }
+
+    #[test]
+    fn artifact_precision_is_the_tier_that_loads() {
+        // Laya and decider-2b ship fp32 + q8: q8 lands, fp16/int8 fall back.
+        for id in [LAYA_TD_MODEL, LAYA_BASE_MODEL, LAYA_MULTI_MODEL, DECIDER2B_MODEL] {
+            assert_eq!(task_artifact_precision(id, Precision::Q8), Precision::Q8, "{id}");
+            assert_eq!(task_artifact_precision(id, Precision::Fp32), Precision::Fp32, "{id}");
+            for p in [Precision::Fp16, Precision::Int8] {
+                assert_eq!(task_artifact_precision(id, p), Precision::Fp32, "{id} {p:?}");
+            }
+        }
+        // Embed specs have no q8 tier.
+        assert_eq!(model_artifact_precision(NANO_TEXT_MODEL, Precision::Q8), Precision::Fp32);
+        assert_eq!(model_artifact_precision(NANO_TEXT_MODEL, Precision::Int8), Precision::Int8);
+        // Unknown ids keep the request (the legacy layout loads what it finds).
+        assert_eq!(task_artifact_precision("someone/custom", Precision::Fp16), Precision::Fp16);
+        assert_eq!(model_artifact_precision("someone/custom", Precision::Fp16), Precision::Fp16);
     }
 
     #[test]

@@ -756,6 +756,7 @@ pub struct LayaDecider {
     temps: LayaTemperatures,
     binning: Option<BinningMap>,
     used_cuda: bool,
+    precision: Precision,
 }
 
 impl LayaDecider {
@@ -794,7 +795,9 @@ impl LayaDecider {
 
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = precision.resolve(used_cuda);
-        if precision == Precision::Fp16 && !used_cuda {
+        if precision == Precision::Fp16 && !used_cuda
+            && crate::acquire::task_artifact_precision(model_id, precision) == Precision::Fp16
+        {
             eprintln!(
                 "embroider: FP16 weights on CPU — this runs >40x slower than FP32-CPU \
                  (emulated half-precision kernels). Explicit request honoured; pass \
@@ -802,6 +805,7 @@ impl LayaDecider {
             );
         }
         let artifact = artifact_for_task(model_id, precision);
+        let precision = crate::acquire::task_artifact_precision(model_id, precision);
 
         // ---- acquisition (artifact repo holds graph + tokenizer + config) ----
         // Caller revision wins; otherwise the tier pin.
@@ -824,7 +828,7 @@ impl LayaDecider {
         let _ = fetch_repo_file(&artifact.repo, "tokenizer_config.json", rev_ref, cache_dir.clone());
         let cfg_path =
             fetch_repo_file(&artifact.repo, "rl_agent_config.json", rev_ref, cache_dir)?;
-        Self::from_files(&onnx_path, &tok_path, &cfg_path, model_id, device, max_length, cpu_arena)
+        Self::from_files(&onnx_path, &tok_path, &cfg_path, model_id, device, max_length, cpu_arena, precision)
     }
 
     /// Load from explicit local files — no network access. The config
@@ -858,6 +862,7 @@ impl LayaDecider {
             device,
             max_length,
             cpu_arena,
+            Precision::Fp32,
         )
     }
 
@@ -870,6 +875,7 @@ impl LayaDecider {
         device: DeviceReq,
         max_length: usize,
         cpu_arena: bool,
+        precision: Precision,
     ) -> Result<Self> {
         if !onnx_path.is_file() {
             return Err(anyhow!("onnx model not found: {}", onnx_path.display()));
@@ -930,6 +936,7 @@ impl LayaDecider {
             temps,
             binning: None,
             used_cuda: loaded.used_cuda,
+            precision,
         })
     }
 
@@ -939,6 +946,13 @@ impl LayaDecider {
 
     pub fn used_cuda(&self) -> bool {
         self.used_cuda
+    }
+
+    /// Precision of the weights the session loaded (`auto` resolved
+    /// against the landed device; an unshipped tier reads `fp32`, the
+    /// artifact it fell back to). Explicit files report `fp32`.
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     /// Effective sequence cap.

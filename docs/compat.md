@@ -10,9 +10,16 @@ proof — okfgraph's suite asserts live vectors against them.
 | 0.7.x | 0.5.x+ | 0.2.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.8.x | 0.5.x+ | 0.3.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.11.x + pin bump (unreleased) | 0.6.x+ | 0.14.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.13 (planned) | 0.8.1+ (0.9 planned) | 0.15.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
 
 Rules:
 
+- **One identity (0.15)**: `Model.describe()["space"]` names a vector
+  space; a host (`python -m embroider.serve`) and an in-process model
+  with equal `space` give identical vectors, so a graph can move
+  between them without re-embedding. See `serve.md`.
+- **One locator (0.15)**: `embroider.locate_runtime()` finds the ORT
+  library without importing `onnxruntime`; consumers delegate to it.
 - **Single pinned ORT**: one `onnxruntime` binary shared by every Rust
   consumer (`ORT_DYLIB_PATH`-overridable). Never float it per project.
 - **Floor pin**: okfgraph 0.7.x requires `embroider>=0.2,<0.3`, 0.8.x

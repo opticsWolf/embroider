@@ -150,7 +150,9 @@ impl Reranker {
         // device the session will actually land on.
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = precision.resolve(used_cuda);
-        if precision == Precision::Fp16 && !used_cuda {
+        if precision == Precision::Fp16 && !used_cuda
+            && crate::acquire::task_artifact_precision(model_id, precision) == Precision::Fp16
+        {
             eprintln!(
                 "embroider: FP16 weights on CPU — this runs >40x slower than FP32-CPU \
                  (emulated half-precision kernels). Explicit request honoured; pass \
@@ -176,6 +178,7 @@ impl Reranker {
             }
             warn_if_unmeasured_task(&spec, model_id, precision);
         }
+        let precision = crate::acquire::task_artifact_precision(model_id, precision);
 
         // ---- model acquisition (per-artifact file layout) ----
         // No sidecar probe: both spike artifacts are A0-verified

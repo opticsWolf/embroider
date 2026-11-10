@@ -11,13 +11,16 @@ use ort::ep::{ExecutionProvider, CUDA};
 ///
 /// Panic-free by contract: with load-dynamic and no resolvable dylib, the
 /// first ort API call panics (`.expect`ed init). A probe reports "no CUDA"
-/// instead — consumers resolve the dylib themselves before real sessions;
-/// the probe must never be the thing that kills the process.
+/// instead; the probe must never be the thing that kills the process.
+///
+/// It is the process's first ort touch (every open and every runtime
+/// report goes through it), so the runtime locator runs here first.
 pub fn cuda_available() -> bool {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::OnceLock;
     static PROBE: OnceLock<bool> = OnceLock::new();
     *PROBE.get_or_init(|| {
+        crate::diag::ensure_runtime_located();
         catch_unwind(AssertUnwindSafe(|| {
             CUDA::default().is_available().unwrap_or(false)
         }))

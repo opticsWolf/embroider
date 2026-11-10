@@ -680,6 +680,7 @@ pub struct Decider2B {
     max_len: usize,
     model_id: String,
     used_cuda: bool,
+    precision: Precision,
 }
 
 impl Decider2B {
@@ -720,6 +721,7 @@ impl Decider2B {
             );
         }
         let artifact = artifact_for_task(model_id, precision);
+        let precision = crate::acquire::task_artifact_precision(model_id, precision);
 
         // ---- acquisition (artifact repo holds all five files) ----
         let rev = revision.map(str::to_string).or(artifact.revision.clone());
@@ -763,6 +765,7 @@ impl Decider2B {
             device,
             check_decider2b_limit_for(max_length, spec.max_tokens)?,
             cpu_arena,
+            precision,
         )
     }
 
@@ -802,6 +805,7 @@ impl Decider2B {
             device,
             max_length,
             cpu_arena,
+            Precision::Fp32,
         )
     }
 
@@ -815,6 +819,7 @@ impl Decider2B {
         device: DeviceReq,
         max_length: usize,
         cpu_arena: bool,
+        precision: Precision,
     ) -> Result<Self> {
         if !onnx_path.is_file() {
             return Err(anyhow!("onnx model not found: {}", onnx_path.display()));
@@ -871,6 +876,7 @@ impl Decider2B {
             max_len: max_length,
             model_id: model_id.to_string(),
             used_cuda,
+            precision,
         })
     }
     pub fn model_id(&self) -> &str {
@@ -879,6 +885,13 @@ impl Decider2B {
 
     pub fn used_cuda(&self) -> bool {
         self.used_cuda
+    }
+
+    /// Precision of the weights the session loaded (`auto` resolved
+    /// against the landed device; an unshipped tier reads `fp32`, the
+    /// artifact it fell back to). Explicit files report `fp32`.
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     /// Effective sequence cap.

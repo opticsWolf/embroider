@@ -249,6 +249,14 @@ impl PyTokenizer {
             .count_tokens(text)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
     }
+
+    /// Token ids, encoded the way `count_tokens` counts them:
+    /// `len(encode(text)) == count_tokens(text)`.
+    fn encode(&self, text: &str) -> PyResult<Vec<u32>> {
+        self.inner
+            .encode_ids(text)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{e:#}")))
+    }
 }
 
 #[cfg(feature = "extension-module")]
@@ -751,6 +759,11 @@ impl PyLayaDecider {
     }
 
     #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
+    }
+
+    #[getter]
     fn max_length(&self) -> usize {
         self.inner.max_len()
     }
@@ -957,6 +970,11 @@ impl PyDecider2B {
     #[getter]
     fn used_cuda(&self) -> bool {
         self.inner.used_cuda()
+    }
+
+    #[getter]
+    fn precision(&self) -> &str {
+        self.inner.precision().as_str()
     }
 
     #[getter]
@@ -1182,7 +1200,10 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
         .map(|m| {
             let mut d = std::collections::HashMap::new();
             d.insert("id".to_string(), m.id.to_string());
-            d.insert("kind".to_string(), "embed".to_string());
+            // 0.15: an image slot (it has a text partner) lists as
+            // `vision`, so text-embedder pickers can filter on `embed`.
+            let kind = if m.text_partner.is_some() { "vision" } else { "embed" };
+            d.insert("kind".to_string(), kind.to_string());
             d.insert("native_dim".to_string(), m.native_dim.to_string());
             d.insert("max_tokens".to_string(), m.max_tokens.to_string());
             d.insert(
@@ -1235,7 +1256,8 @@ fn available_models() -> Vec<std::collections::HashMap<String, String>> {
     for m in acquire::registered_models() {
         let mut d = std::collections::HashMap::new();
         d.insert("id".to_string(), m.id);
-        d.insert("kind".to_string(), "embed".to_string());
+        let kind = if m.text_partner.is_some() { "vision" } else { "embed" };
+        d.insert("kind".to_string(), kind.to_string());
         d.insert("native_dim".to_string(), String::new());
         d.insert("max_tokens".to_string(), m.max_tokens.to_string());
         d.insert(
@@ -1761,6 +1783,38 @@ fn prepare_cuda_runtime_py(py: Python<'_>) -> PyResult<pyo3::Bound<'_, pyo3::PyA
     value_to_py(py, &diag::prepare_cuda_dirs(venv.as_deref()))
 }
 
+/// Find the ONNX Runtime library ([`diag::locate_runtime`]): `hints` are
+/// site-packages dirs searched first, then (with `search_prefix`) the
+/// interpreter prefix's. Returns `{dylib, source, version}`. The public
+/// `embroider.locate_runtime` wraps this and sets the env from Python.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "locate_runtime")]
+#[pyo3(signature = (hints=None, search_prefix=true, set_env=false))]
+fn locate_runtime_py(
+    py: Python<'_>,
+    hints: Option<Vec<String>>,
+    search_prefix: bool,
+    set_env: bool,
+) -> PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
+    let hints: Vec<std::path::PathBuf> =
+        hints.unwrap_or_default().into_iter().map(std::path::PathBuf::from).collect();
+    value_to_py(py, &diag::locate_runtime(&hints, search_prefix, set_env).to_json())
+}
+
+/// The ONNX Runtime library inside an installed `onnxruntime` package
+/// folder, or `None`. `os` takes `std::env::consts::OS` spellings
+/// (`windows`, `macos`, `linux`); default: this machine.
+#[cfg(feature = "extension-module")]
+#[pyfunction(name = "ort_library_in_package")]
+#[pyo3(signature = (package_dir, os=None))]
+fn ort_library_in_package_py(package_dir: &str, os: Option<&str>) -> Option<String> {
+    diag::library_in_package_for(
+        std::path::Path::new(package_dir),
+        os.unwrap_or(std::env::consts::OS),
+    )
+    .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Module-level fallback (PEP 562): keeps the old `JinaTokenizer` name
 /// working after the rename to `Tokenizer`. Warns instead of silently
 /// aliasing so consumers migrate; remove in a later minor.
@@ -1781,8 +1835,12 @@ fn __getattr__(py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
     )))
 }
 
+/// The native half of the `embroider` package (0.15): `python/embroider`
+/// re-exports every name from here and adds the pure-Python layer
+/// (`open`, `locate_runtime`, `serve`, ...).
 #[cfg(feature = "extension-module")]
 #[pymodule]
+#[pyo3(name = "_native")]
 fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Record the interpreter root for diag/policy-time loader fixes:
     // `sys.prefix` is the running interpreter's own root (the venv root
@@ -1821,6 +1879,8 @@ fn embroider(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(configure_runtime_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(save_runtime_info_py, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(prepare_cuda_runtime_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(locate_runtime_py, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(ort_library_in_package_py, m)?)?;
     m.add("VISION_NANO_MODEL", VISION_NANO_MODEL)?;
     m.add("NATIVE_DIM", NATIVE_DIM)?;
     m.add("MAX_LENGTH", MAX_LENGTH)?;

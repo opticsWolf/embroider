@@ -383,6 +383,7 @@ impl JinaV5Vision {
         let (_, used_cuda) = resolve_provider_names(device);
         let precision = resolve_vision_precision(precision, used_cuda)?;
         let artifact = artifact_for(model_id, precision);
+        let precision = crate::acquire::model_artifact_precision(model_id, precision);
         // Caller revision wins; otherwise the tier pin.
         let rev = revision.map(str::to_string).or(artifact.revision.clone());
         if let Some(spec) = resolved.as_ref() {

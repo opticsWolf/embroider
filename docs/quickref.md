@@ -10,7 +10,7 @@ pip install embroider
 ```
 
 ```rust
-embroider = "0.14"  // shared ORT plumbing; embedding (Jina v5 + Gemma 2) + rerank/decide engines included
+embroider = "0.15"  // shared ORT plumbing; embedding (Jina v5 + Gemma 2) + rerank/decide engines included
 ```
 
 Needs exactly one ONNX Runtime: `onnxruntime==1.31.1` (or
@@ -23,6 +23,33 @@ from embroider import prepare_cuda_runtime
 prepare_cuda_runtime()   # 0.14.0+: self-service CUDA loader PATH (venv
                          # nvidia dists + capi dirs + SDK roots), idempotent;
                          # every CUDA open already runs this itself
+
+import embroider
+embroider.locate_runtime()   # 0.15: {dylib, source, version}; runs on import,
+                             # never imports onnxruntime, never overrides the env
+```
+
+## One factory, any kind (Python, 0.15)
+
+```python
+import embroider
+m = embroider.open("embed", "google/embeddinggemma-2", truncate_dim=512, device="cpu")
+m = embroider.open(None, "convaiinnovations/laya")   # kind from the registry
+embroider.KINDS        # embed, vision, rerank, decide, decide-laya, decide-2b
+embroider.OPEN_KWARGS  # what each kind's open takes (others: TypeError)
+m.describe()           # id, kind, engine_version, contract, revision (sha), device,
+                       # precision, max_length, family; embed/vision: dim, native_dim,
+                       # ladder, tuning, space
+m.space                # "embroider/<id>@<sha>:<prec>:<dim>:<max_len>:<tuning>:v1"
+m.tokenize("text")     # token ids, or None when no tokenizer opens by id
+m.encode_batch([...], task="Query")   # everything else: the native model's own call
+```
+
+## Serving (0.15)
+
+```bash
+python -m embroider.serve --kind embed --model google/embeddinggemma-2 --dim 512 --port 0
+# stderr: listening http://127.0.0.1:<port>; routes and identity: docs/serve.md
 ```
 
 ## Text embeddings (Python)
@@ -348,6 +375,7 @@ t = Tokenizer.open("jinaai/jina-embeddings-v5-text-small-retrieval")
 t = Tokenizer.open("google/embeddinggemma-2")   # any tokenizer, not just Jina
 t = Tokenizer.open_files("tokenizer.json")   # no download at all
 t.count_tokens("...")   # true length, never truncated (~0.5 s cold)
+t.encode("...")         # 0.15: the ids; len(t.encode(x)) == t.count_tokens(x)
 ```
 
 ## Cache inspection (Python)

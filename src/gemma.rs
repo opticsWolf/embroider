@@ -283,6 +283,7 @@ impl GemmaVision {
         // ---- acquisition: vision tower at the tier, text tower via partner ----
         let v_artifact = artifact_for(model_id, precision);
         let t_artifact = artifact_for(&partner_id, precision);
+        let precision = crate::acquire::model_artifact_precision(model_id, precision);
         let v_rev = revision.map(str::to_string).or(v_artifact.revision.clone());
         let t_rev = revision.map(str::to_string).or(t_artifact.revision.clone());
 

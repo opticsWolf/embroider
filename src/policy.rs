@@ -212,7 +212,9 @@ pub(crate) fn resolve_provider_names(device: DeviceReq) -> (Vec<String>, bool) {
     // onnxruntime.dll a sibling tool dropped on PATH, and the CUDA
     // kernels crash on a missing cudnn64_9.dll. Idempotent +
     // never-throwing; the pins a caller set explicitly are respected.
-    // CPU requests skip it: they need neither CUDA EPs nor the deps.
+    // The library choice applies to every device (a CPU session loads the
+    // stray copy just as readily); the CUDA deps only to non-CPU requests.
+    crate::diag::ensure_runtime_located();
     if !matches!(device, DeviceReq::Cpu) {
         let venv = crate::diag::venv_prefix();
         let _ = crate::diag::prepare_cuda_dirs(venv.as_deref());

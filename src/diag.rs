@@ -177,69 +177,184 @@ fn path_has_entry(path: &str, dir: &str) -> bool {
         .any(|e| norm(e) == norm(dir))
 }
 
-/// The best ONNX Runtime dylib the venv ships: the `capi` dir of every
-/// `onnxruntime*` dist (GPU builds first), ranked by the version the
-/// sibling dist-info dir carries. ort's load-dynamic search walks PATH
-/// and resolves whatever stray `onnxruntime.dll` a sibling tool dropped
-/// there (observed: a 1.17.1 in a model-runner's bin) — passing the
-/// venv's own dylib through `ORT_DYLIB_PATH` makes the loaded version a
-/// choice instead of a lottery.
-fn best_ort_dylib(venv: Option<&str>) -> Option<std::path::PathBuf> {
-    let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
-    // Windows filesystems are case-insensitive, so the same venv can
-    // surface as both `Lib/…` and `lib/…` — dedupe by the canonical dir
-    // (the same spelling caveat runtime_report handles for its report).
-    let mut site_packages: Vec<std::path::PathBuf> = Vec::new();
-    let mut seen_sp: std::collections::HashSet<String> = Default::default();
-    for sp in site_packages_dirs_for(venv.map(std::path::PathBuf::from)) {
-        let key = std::fs::canonicalize(&sp)
+/// The ONNX Runtime library inside an installed `onnxruntime` package
+/// (its `capi` folder), for the platform *os* names in
+/// `std::env::consts::OS` spelling (`windows`, `macos`; anything else
+/// reads as Linux). Linux takes the newest versioned
+/// `libonnxruntime.so.*` before the bare `libonnxruntime.so`; macOS the
+/// bare `libonnxruntime.dylib` before the newest versioned
+/// `libonnxruntime.*.dylib`. *os* is a parameter so every branch is
+/// testable on any machine.
+pub fn library_in_package_for(
+    package_dir: &std::path::Path,
+    os: &str,
+) -> Option<std::path::PathBuf> {
+    let capi = package_dir.join("capi");
+    if !capi.is_dir() {
+        return None;
+    }
+    let listed = || -> Vec<String> {
+        std::fs::read_dir(&capi).map(|rd| rd.filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect()).unwrap_or_default()
+    };
+    let names: Vec<String> = match os {
+        "windows" => vec!["onnxruntime.dll".to_string()],
+        "macos" => {
+            let mut versioned: Vec<String> = listed().into_iter()
+                .filter(|n| n.starts_with("libonnxruntime.") && n.ends_with(".dylib")
+                        && n != "libonnxruntime.dylib")
+                .collect();
+            versioned.sort();
+            versioned.reverse();
+            std::iter::once("libonnxruntime.dylib".to_string()).chain(versioned).collect()
+        }
+        _ => {
+            let mut versioned: Vec<String> = listed().into_iter()
+                .filter(|n| n.starts_with("libonnxruntime.so."))
+                .collect();
+            versioned.sort();
+            versioned.reverse();
+            versioned.into_iter().chain(std::iter::once("libonnxruntime.so".to_string())).collect()
+        }
+    };
+    names.into_iter().map(|n| capi.join(n)).find(|p| p.is_file())
+}
+
+/// Distributions that install the `onnxruntime` package, GPU build
+/// first: `(dist-info prefix, distribution name)`.
+const RUNTIME_DISTRIBUTIONS: [(&str, &str); 2] = [
+    ("onnxruntime_gpu-", "onnxruntime-gpu"),
+    ("onnxruntime-", "onnxruntime"),
+];
+
+/// `(distribution, version)` of the runtime installed in *site_packages*,
+/// read from its dist-info folder name
+/// (`onnxruntime_gpu-1.31.1.dist-info` → `("onnxruntime-gpu", "1.31.1")`).
+fn runtime_distribution(site_packages: &std::path::Path) -> Option<(String, String)> {
+    let names: Vec<String> = std::fs::read_dir(site_packages).ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().to_lowercase())
+        .collect();
+    for (prefix, dist) in RUNTIME_DISTRIBUTIONS {
+        if let Some(n) = names.iter().find(|n| n.starts_with(prefix) && n.ends_with(".dist-info")) {
+            let version = &n[prefix.len()..n.len() - ".dist-info".len()];
+            return Some((dist.to_string(), version.to_string()));
+        }
+    }
+    None
+}
+
+/// Where the ONNX Runtime library is: what [`locate_runtime`] answers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuntimeLocation {
+    /// The library, or `None` when nothing was found (`source == "os"`).
+    pub dylib: Option<std::path::PathBuf>,
+    /// `env` (`ORT_DYLIB_PATH` was set), `pip:<distribution>` (`pip`
+    /// when no dist-info names it), or `os` (not found).
+    pub source: String,
+    /// The distribution's version (`pip:` sources only).
+    pub version: Option<String>,
+}
+
+impl RuntimeLocation {
+    /// `{dylib, source, version}`, the shape the Python layer returns.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "dylib": self.dylib.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            "source": self.source,
+            "version": self.version,
+        })
+    }
+}
+
+/// The first of *site_packages* (in order: the caller's import order)
+/// whose `onnxruntime` package holds a library for *os*.
+pub fn find_runtime_in(
+    site_packages: &[std::path::PathBuf],
+    os: &str,
+) -> Option<RuntimeLocation> {
+    site_packages.iter().find_map(|sp| {
+        let dylib = library_in_package_for(&sp.join("onnxruntime"), os)?;
+        let dist = runtime_distribution(sp);
+        Some(RuntimeLocation {
+            dylib: Some(dylib),
+            source: dist.as_ref().map_or_else(|| "pip".to_string(), |(d, _)| format!("pip:{d}")),
+            version: dist.map(|(_, v)| v),
+        })
+    })
+}
+
+/// *dirs* with repeats removed, first spelling kept. Windows filesystems
+/// are case-insensitive, so one venv can surface as both `Lib/…` and
+/// `lib/…`: dedupe by the canonical dir (the spelling caveat
+/// runtime_report handles for its report).
+fn dedupe_dirs(dirs: Vec<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    dirs.into_iter().filter(|d| {
+        let key = std::fs::canonicalize(d)
             .map(|c| c.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| sp.to_string_lossy().into_owned());
-        if seen_sp.insert(key) {
-            site_packages.push(sp);
+            .unwrap_or_else(|_| d.to_string_lossy().into_owned());
+        seen.insert(key)
+    }).collect()
+}
+
+/// Find the ONNX Runtime library, the one way every consumer finds it.
+///
+/// 1. `ORT_DYLIB_PATH` already set: it wins, `source = "env"`.
+/// 2. An `onnxruntime` / `onnxruntime-gpu` pip install in *hints*
+///    (site-packages dirs, searched first: the Python layer passes the
+///    one `find_spec` resolves, so user site, `PYTHONPATH` and editable
+///    layouts count), then, with *search_prefix*, in the interpreter
+///    prefix's site-packages ([`venv_prefix`]). With *set_env* the
+///    library becomes `ORT_DYLIB_PATH` (the Python layer sets it through
+///    `os.environ` instead, so Python code reads it too).
+/// 3. Nothing: `dylib = None`, `source = "os"`: ort would try the OS
+///    loader path, which can hold a stale copy a sibling tool dropped
+///    there (observed: a 1.17.1 in a model-runner's bin).
+///
+/// Never touches ort, never fails. ort reads `ORT_DYLIB_PATH` when the
+/// first session builds, so this must run before that (every open does
+/// it through [`ensure_runtime_located`]).
+pub fn locate_runtime(
+    hints: &[std::path::PathBuf],
+    search_prefix: bool,
+    set_env: bool,
+) -> RuntimeLocation {
+    if let Some(explicit) = std::env::var_os("ORT_DYLIB_PATH").filter(|v| !v.is_empty()) {
+        return RuntimeLocation {
+            dylib: Some(std::path::PathBuf::from(explicit)),
+            source: "env".to_string(),
+            version: None,
+        };
+    }
+    let mut dirs = hints.to_vec();
+    if search_prefix {
+        dirs.extend(site_packages_dirs_for(venv_prefix().map(std::path::PathBuf::from)));
+    }
+    let Some(found) = find_runtime_in(&dedupe_dirs(dirs), std::env::consts::OS) else {
+        return RuntimeLocation { dylib: None, source: "os".to_string(), version: None };
+    };
+    if set_env {
+        if let Some(dylib) = &found.dylib {
+            // SAFETY: process-start-style configuration before ort init,
+            // the same window configure_runtime documents.
+            unsafe {
+                std::env::set_var("ORT_DYLIB_PATH", dylib);
+            }
         }
     }
-    for sp in site_packages {
-        let Ok(rd) = std::fs::read_dir(&sp) else { continue };
-        for e in rd.filter_map(|e| e.ok()) {
-            let dist = e.path();
-            if !dist.is_dir() {
-                continue;
-            }
-            let name = dist.file_name().and_then(|s| s.to_str())
-                .unwrap_or("").to_lowercase();
-            if !name.starts_with("onnxruntime") || name.ends_with(".dist-info") {
-                continue;
-            }
-            let dll = dist.join("capi").join("onnxruntime.dll");
-            if !dll.is_file() {
-                continue;
-            }
-            // The sibling dist-info carries the version the static
-            // checker verifies anyway (BadVersion) — parse it for rank
-            // (`onnxruntime_gpu-1.31.1.dist-info` → "1.31.1").
-            let ver = std::fs::read_dir(&sp).ok()
-                .and_then(|de| de.filter_map(|e| e.ok())
-                    .map(|e| e.file_name().to_string_lossy().into_owned())
-                    .find(|n| {
-                        let n = n.to_lowercase();
-                        n.starts_with(&name) && n.ends_with(".dist-info")
-                    }))
-                .and_then(|n| {
-                    n.to_lowercase()
-                        .rsplit_once('-')
-                        .map(|(_, tail)| {
-                            tail.trim_end_matches(".dist-info").to_string()
-                        })
-                })
-                .unwrap_or_else(|| "0".to_string());
-            // GPU builds outrank same-version CPU builds.
-            let rank = format!("{ver}{}", if name.contains("gpu") {"1"} else {"0"});
-            found.push((rank, dll));
-        }
-    }
-    found.sort();
-    found.last().map(|(_r, p)| p.clone())
+    found
+}
+
+/// [`locate_runtime`] once per process, before the first session (the
+/// provider resolution calls it for every device, CPU included: a CPU
+/// session loads the stray library just as readily).
+pub(crate) fn ensure_runtime_located() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = locate_runtime(&[], true, true);
+    });
 }
 
 /// Put the CUDA lane's DLL dirs on the search path so a fresh process
@@ -269,7 +384,10 @@ pub fn prepare_cuda_dirs(venv: Option<&str>) -> serde_json::Value {
     // the env is only read at first init, so consumers who set it (the
     // documented contract) keep their choice.
     let dylib = std::env::var("ORT_DYLIB_PATH").err()
-        .and_then(|_| best_ort_dylib(venv))
+        .and_then(|_| find_runtime_in(
+            &dedupe_dirs(site_packages_dirs_for(venv.map(std::path::PathBuf::from))),
+            std::env::consts::OS))
+        .and_then(|found| found.dylib)
         .map(|p| p.to_string_lossy().into_owned());
     if candidates.is_empty() && dylib.is_none() {
         return serde_json::json!({ "prepended": [], "candidates": 0,
@@ -454,6 +572,9 @@ pub fn runtime_report() -> serde_json::Value {
 /// passes `VIRTUAL_ENV`, falling back to the interpreter's own
 /// `sys.prefix`, so activation is not required to see the installs).
 pub fn runtime_report_for(venv: Option<&str>) -> serde_json::Value {
+    // Report the library a session would load, not the env before the
+    // locator ran (the CUDA probe below would run it anyway).
+    ensure_runtime_located();
     let venv = venv.map(std::path::PathBuf::from);
     let dylib = std::env::var("ORT_DYLIB_PATH").ok();
     let (dylib_exists, siblings) = match &dylib {
@@ -630,7 +751,9 @@ mod tests {
     fn prepare_cuda_dirs_delivers_the_venv_ort_dylib() {
         let _env = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let root = std::env::temp_dir().join("embroider-ort-dist-test");
-        let capi = root.join("Lib").join("site-packages").join("onnxruntime_gpu")
+        // The GPU wheel installs the `onnxruntime` package; only its
+        // dist-info names the GPU build.
+        let capi = root.join("Lib").join("site-packages").join("onnxruntime")
             .join("capi");
         std::fs::create_dir_all(&capi).ok();
         let dll = capi.join("onnxruntime.dll");
@@ -713,5 +836,100 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text).expect("parses");
         assert!(v.get("cuda_usable").is_some());
         std::fs::remove_file(&path).ok();
+    }
+
+    /// A fresh scratch dir holding `files` (relative paths, created empty).
+    fn scratch(name: &str, files: &[&str]) -> std::path::PathBuf {
+        let root = std::env::temp_dir()
+            .join(format!("embroider-locate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for f in files {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            if f.ends_with('/') {
+                std::fs::create_dir_all(&p).unwrap();
+            } else {
+                std::fs::write(&p, b"").unwrap();
+            }
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn library_in_package_follows_each_platform() {
+        let pkg = scratch("lib", &[
+            "capi/onnxruntime.dll",
+            "capi/libonnxruntime.so",
+            "capi/libonnxruntime.so.1.30.0",
+            "capi/libonnxruntime.so.1.31.1",
+            "capi/libonnxruntime.1.31.1.dylib",
+        ]);
+        let name = |os| library_in_package_for(&pkg, os)
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned());
+        assert_eq!(name("windows").as_deref(), Some("onnxruntime.dll"));
+        assert_eq!(name("linux").as_deref(), Some("libonnxruntime.so.1.31.1"));
+        // No bare dylib: the versioned one.
+        assert_eq!(name("macos").as_deref(), Some("libonnxruntime.1.31.1.dylib"));
+        std::fs::write(pkg.join("capi/libonnxruntime.dylib"), b"").unwrap();
+        assert_eq!(name("macos").as_deref(), Some("libonnxruntime.dylib"));
+        assert_eq!(library_in_package_for(&pkg.join("missing"), "linux"), None);
+        std::fs::remove_dir_all(&pkg).ok();
+    }
+
+    #[test]
+    fn find_runtime_takes_the_first_site_dir_and_names_its_distribution() {
+        let root = scratch("find", &[
+            "empty/",
+            "gpu/onnxruntime/capi/onnxruntime.dll",
+            "gpu/onnxruntime_gpu-1.31.1.dist-info/",
+            "cpu/onnxruntime/capi/onnxruntime.dll",
+            "cpu/onnxruntime-1.30.0.dist-info/",
+            "bare/onnxruntime/capi/onnxruntime.dll",
+        ]);
+        let dirs = |names: &[&str]| names.iter().map(|n| root.join(n)).collect::<Vec<_>>();
+        let found = find_runtime_in(&dirs(&["empty", "gpu", "cpu"]), "windows").unwrap();
+        assert_eq!(found.dylib, Some(root.join("gpu/onnxruntime/capi/onnxruntime.dll")));
+        assert_eq!((found.source.as_str(), found.version.as_deref()),
+                   ("pip:onnxruntime-gpu", Some("1.31.1")));
+        let found = find_runtime_in(&dirs(&["cpu", "gpu"]), "windows").unwrap();
+        assert_eq!((found.source.as_str(), found.version.as_deref()),
+                   ("pip:onnxruntime", Some("1.30.0")));
+        let found = find_runtime_in(&dirs(&["bare"]), "windows").unwrap();
+        assert_eq!((found.source.as_str(), found.version), ("pip", None));
+        assert_eq!(find_runtime_in(&dirs(&["empty"]), "windows"), None);
+        assert_eq!(find_runtime_in(&dirs(&["gpu"]), "linux"), None, "no .so in a Windows install");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn locate_runtime_lets_an_explicit_path_win_and_sets_the_found_one() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = std::env::var_os("ORT_DYLIB_PATH");
+        let lib = if cfg!(windows) { "onnxruntime.dll" }
+            else if cfg!(target_os = "macos") { "libonnxruntime.dylib" }
+            else { "libonnxruntime.so" };
+        let root = scratch("locate", &[&format!("sp/onnxruntime/capi/{lib}"),
+                                       "sp/onnxruntime-1.31.1.dist-info/"]);
+        let hints = [root.join("sp")];
+
+        unsafe { std::env::set_var("ORT_DYLIB_PATH", "/pinned/by/caller"); }
+        let got = locate_runtime(&hints, false, true);
+        assert_eq!((got.source.as_str(), got.dylib),
+                   ("env", Some(std::path::PathBuf::from("/pinned/by/caller"))));
+
+        unsafe { std::env::remove_var("ORT_DYLIB_PATH"); }
+        let got = locate_runtime(&hints, false, false);
+        assert_eq!(got.source, "pip:onnxruntime");
+        assert!(std::env::var_os("ORT_DYLIB_PATH").is_none(), "set_env=false leaves the env alone");
+        let got = locate_runtime(&hints, false, true);
+        assert_eq!(std::env::var_os("ORT_DYLIB_PATH").map(std::path::PathBuf::from), got.dylib);
+        assert_eq!(got.to_json()["version"], "1.31.1");
+
+        match before {
+            Some(v) => unsafe { std::env::set_var("ORT_DYLIB_PATH", v); },
+            None => unsafe { std::env::remove_var("ORT_DYLIB_PATH"); },
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 }

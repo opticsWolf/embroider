@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "embroider"
-version = "0.14.1"
+version = "0.15.0"
 description = "Jina v5 text embeddings via ONNX Runtime (Rust core, PyO3 bindings)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,11 +12,19 @@ authors = [
     { name = "opticsWolf", email = "opticswolf@protonmail.com" },
 ]
 
+[project.optional-dependencies]
+# `embroider.prepare_image` decodes and resizes with Pillow (bicubic), the
+# resize okfgraph's image vectors were built with.
+image = ["Pillow>=10"]
+
 [project.urls]
 Homepage = "https://opticswolf.github.io/embroider/"
 Repository = "https://github.com/opticsWolf/embroider"
 
 [tool.maturin]
 bindings = "pyo3"
-module-name = "embroider"
+# 0.15: a Python package (`python/embroider`) around the native module, so
+# the server, the runtime locator and `open()` live next to the models.
+python-source = "python"
+module-name = "embroider._native"
 features = ["extension-module"]

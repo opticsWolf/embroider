@@ -3,6 +3,71 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.15.0] — unreleased
+
+One way to load, serve and identify a model, for every consumer
+(okfgraph, bobine, Silk).
+
+### Added
+- **Python package layer.** The wheel is now a package (`python/embroider`,
+  maturin `python-source`) around the native module `embroider._native`.
+  Every public name stays importable from `embroider`; the `JinaTokenizer`
+  alias moved to the package's `__getattr__` (still warns).
+- **One runtime locator, in Rust: `diag::locate_runtime`** (Python:
+  `embroider.locate_runtime()`). Finds the pip-installed ONNX Runtime
+  (`onnxruntime` / `onnxruntime-gpu`) in its package's `capi` folder on
+  Windows, Linux and macOS, names the build and version from its
+  dist-info, and sets `ORT_DYLIB_PATH` when unset (an explicit value
+  always wins). Returns `{dylib, source, version}`. **It runs before
+  ort's first touch** (the CUDA probe, which every open, CPU included,
+  and every `runtime_info()` goes through): a CPU session or a runtime
+  report no longer loads a stray `onnxruntime.dll` from PATH, and the
+  FP16-on-CPU warning fires only when fp16 weights load. The Python wrapper passes
+  the folder `find_spec` resolves (never importing the module), sets the
+  env through `os.environ`, and runs once on `import embroider`. Replaces
+  the Windows-only, CUDA-only `best_ort_dylib`, and is meant to replace
+  okfgraph's `resolve_ort_dylib` and bobine's `_ensure_ort_dylib`.
+  `ort_library_in_package(dir, os)` exposes the per-platform file rule.
+- **`precision` on `LayaDecider` and `Decider2B`**, like every other
+  model class.
+- **`embroider.open(kind, model_id, **options)`** for every registry kind
+  (`embed`, `vision`, `rerank`, `decide`, `decide-laya`, `decide-2b`;
+  `kind=None` reads the registry). Returns a `Model`: the native model
+  (every call falls through) plus `describe()`, `space` and `tokenize()`.
+  Options the kind doesn't take are a `TypeError` (`OPEN_KWARGS`).
+- **Identity: `Model.describe()` and `embroider.space_id(...)`.** Model,
+  kind, engine version, wire contract, resolved snapshot sha, landed
+  device and precision, width, ladder, max length, and for embed/vision
+  `space`: equal `space`, identical vectors. `VECTOR_CONTRACT` (`v1`)
+  changes only when vectors do.
+- **`Tokenizer.encode(text)`**: the token ids, encoded as `count_tokens`
+  counts them.
+- **`embroider.prepare_image(data, model_id)`**: decode + bicubic resize
+  to the vision slot's grid (moved from okfgraph's `prepare_vision_rgb`,
+  same pixels). Pillow via the new `embroider[image]` extra.
+- **`python -m embroider.serve`**: one model of any kind over HTTP, in the
+  llama.cpp shapes (`/v1/embeddings` with `task`, `/v1/images/embeddings`,
+  `/v1/rerank`, `/v1/systemone`, `/tokenize` with real ids, `/v1/models`
+  with the identity). The host applies the model's prompts. See
+  `docs/serve.md`.
+
+### Changed
+- **`precision` reports the weights that loaded.** A request for a tier
+  the model doesn't ship (an fp16 Laya, an int8 decider-2b, any q8 embed)
+  falls back to the fp32 artifact, and every model class now reads
+  `fp32` there instead of echoing the request
+  (`task_artifact_precision` / `model_artifact_precision`). For embed and
+  vision models `space` follows, so it matches the space those vectors
+  are really in.
+- `available_models()` lists the vision slots (rows with a
+  `text_partner`) as kind **`vision`** instead of `embed`, so text-embedder
+  pickers can filter on `embed`.
+
+### Verified
+- A hosted model's vectors equal the in-process model's at `abs=0`
+  (`tests/test_serve_live.py`: jina nano, CPU, 20 texts, query and
+  document, separate processes).
+
 ## [0.14.1] — 2026-11-08
 
 ### Added
