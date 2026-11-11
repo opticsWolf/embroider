@@ -26,6 +26,13 @@ vision contracts for its graph; **bobine** (PDF/Office → Markdown)
 reuses only the ONNX plumbing — session policy, provider fallback,
 CUDA probe — while owning its converter-model sessions.
 
+Since 0.15 every model also names itself: `embroider.open(kind, id)`
+returns a `Model` whose `describe()` reports the snapshot, the landed
+device and precision, and for embedders a `space` string — equal
+`space`, identical vectors. `python -m embroider.serve` puts any model
+behind HTTP with that identity on `GET /v1/models`, so a consumer can
+move between in-process and hosted without re-embedding.
+
 ## Engines
 
 | Capability | Loader (Python / Rust) | Registry ids | Precisions |
@@ -61,7 +68,9 @@ pip install onnxruntime==1.31.1             # or -gpu[cuda,cudnn]==1.31.1 — ex
 ```
 
 `okfgraph` pulls it in automatically; standalone, install the wheel plus
-exactly one runtime as above (`ORT_DYLIB_PATH` overrides discovery).
+exactly one runtime as above. `import embroider` finds the pip-installed
+runtime itself (`embroider.locate_runtime()`, without importing
+`onnxruntime`); `ORT_DYLIB_PATH` overrides discovery.
 
 From source: `maturin build --release`, then install the wheel
 (`maturin develop` needs pip, which uv venvs lack).
@@ -70,6 +79,19 @@ From source: `maturin build --release`, then install the wheel
 from embroider import JinaV5
 m = JinaV5.open("jinaai/jina-embeddings-v5-text-small-retrieval")
 v = m.encode("what do badgers eat?", task="query")   # 512-d unit vector, golden-pinned
+```
+
+Any kind through one factory (0.15), and the same model over HTTP:
+
+```python
+import embroider
+m = embroider.open("embed", "google/embeddinggemma-2", truncate_dim=512)
+m.describe()["precision"]   # the weights that loaded, not the request
+m.space                     # "embroider/<id>@<sha>:<prec>:<dim>:<max_len>:<tuning>:v1"
+```
+
+```bash
+python -m embroider.serve --kind embed --model google/embeddinggemma-2 --dim 512
 ```
 
 ## Docs

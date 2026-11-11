@@ -13,7 +13,7 @@ the design decisions and measurements behind it.
 | `policy` | `DeviceReq` (`auto`/`cpu`/`cuda`) + `Precision` (`auto`/`fp32`/`fp16`/`int8`/`q8`) + explicit `SessionPolicy` (`text_embed()`, `rerank_pair()`, `decide_pair()`, `laya()`, `decider2b()`, `ort_defaults()`) |
 | `acquire` | validated `owner/name` parsing, HF client, tokenizer-only fetch, FP16-mirror selection for the default id, offline cache inspection (`cache_info`, generic `cache_info_files`), embedding registry (`ModelSpec`) + task registry (`TaskSpec`: rerank/decide), registration overlay |
 | `error` | anyhow-based error plumbing (`ort` errors stringified at boundaries) |
-| `diag` | runtime inventory — `ORT_DYLIB_PATH` value, venv installs, CUDA DLLs, usability probe (`runtime_info`, `prepare_cuda_dirs`, `save_runtime_info`, `configure_runtime`) |
+| `diag` | runtime locator (`locate_runtime`, `ort_library_in_package`, since 0.15) and runtime inventory — `ORT_DYLIB_PATH` value, venv installs, CUDA DLLs, usability probe (`runtime_info`, `prepare_cuda_dirs`, `save_runtime_info`, `configure_runtime`) |
 | `jina` | `JinaV5` + `TokenizerHandle` (Python `Tokenizer`, since 0.14.1) — the frozen embedding contract; the handle serves every tokenizer (Jina, Gemma — verified byte-identical), never just Jina |
 | `vision` | `JinaV5Vision` — dynamic-grid vision into text-nano space |
 | `gemma` | `GemmaVision` — vision tower + text-tower fusion into Gemma space |
@@ -25,6 +25,20 @@ the design decisions and measurements behind it.
 The default (pure-Rust) build is Python-free — no `pyo3` in downstream
 trees; the `extension-module` Cargo feature gates the PyO3 bindings and
 is enabled only for wheel builds (maturin), the same pattern bobine uses.
+
+Since 0.15 the wheel is a Python package (`python/embroider`, maturin
+`python-source`) around the native module `embroider._native`. The
+package layer holds what is cheaper or only possible in Python:
+
+| Module | Role |
+|---|---|
+| `_runtime` | `locate_runtime()` wrapper: resolves the `onnxruntime` package folder with `find_spec` (never importing it), calls the Rust locator, sets `ORT_DYLIB_PATH` through `os.environ`; runs once on `import embroider` |
+| `_models` | `open(kind, id, **options)` → `Model` (the native model, every call falls through, plus `describe()`, `space`, `tokenize()`); `space_id`, `resolved_revision` (the snapshot sha via `cache_info`), `OPEN_KWARGS` |
+| `_image` | `prepare_image(data, model_id)` — decode + bicubic resize to the vision slot's grid (Pillow, `embroider[image]`) |
+| `_systemone` | question validation and answer shaping for the `/v1/systemone` route |
+| `serve` | `python -m embroider.serve` — one model of any kind over HTTP ([serve.md](serve.md)) |
+
+Every public name stays importable from `embroider`.
 
 ## Using embroider without Jina
 
@@ -58,9 +72,20 @@ with the consumer by design.
 `ort` loads dynamically (`load-dynamic`, same pin as bobine:
 `2.0.0-rc.13`). Resolution order: `ORT_DYLIB_PATH` first (user override
 always wins), else the pip-installed `onnxruntime`/`onnxruntime-gpu`
-build when unset. okfgraph's `resolve_ort_dylib()` runs before the
-native module is imported, so bobine and embroider share **one** ORT
+build when unset, so bobine, embroider and okfgraph share **one** ORT
 binary — no version/CUDA drift between ingest and import.
+
+Since 0.15 one locator does this for every consumer:
+`diag::locate_runtime` (Python `embroider.locate_runtime()`) finds the
+pip build in its package's `capi` folder on Windows, Linux and macOS,
+names the distribution and version from its dist-info, sets
+`ORT_DYLIB_PATH` when unset, and returns `{dylib, source, version}`
+(`source` = `env`, `pip:<dist>` or `os`). It runs before ort's first
+touch — every open, CPU included, and every `runtime_info()` — so a CPU
+session no longer picks up a stray `onnxruntime.dll` from `PATH`. It
+replaces the Windows-only, CUDA-only `best_ort_dylib`, and okfgraph 0.13
+delegates to it (`locate_ort_runtime()`); bobine can call the Rust
+function directly.
 
 Since 0.14.0 the loader path is self-servicing: before the first CUDA
 session, `embroider` prepends the venv's NVIDIA wheel directories, the
@@ -231,6 +256,40 @@ rerankers; GLiClass-small failed the 0-flip gate and stays fp32-only.
 Embeddings never take int8/int4 (quant shifts the vector space — needs
 retrieval re-eval, not parity); fp16 mirrors ship for CUDA serving only,
 parity-gated.
+
+`precision` reports the weights that loaded, not the request (0.15). A
+request for a tier the model doesn't ship (an fp16 Laya, an int8
+decider-2b, any q8 embed) falls back to the fp32 artifact, and every
+model class reads `fp32` there (`task_artifact_precision` /
+`model_artifact_precision`).
+
+## Identity and serving (0.15)
+
+`Model.describe()` names what actually runs: model id, kind, engine
+version, wire contract, the resolved snapshot sha, the landed device and
+precision, width, ladder and max length. For embed and vision models it
+adds `space`:
+
+```
+embroider/<model>@<sha>:<precision>:<dim>:<max_length>:<tuning>:v1
+```
+
+Equal `space`, identical vectors — the rule consumers pin a vector
+index on. The last field is `VECTOR_CONTRACT`, not the release: it
+changes only when vectors do, so a release that leaves vectors alone
+keeps every index valid. Because precision is the landed one, `space`
+matches the vectors' real space even after a tier fallback.
+
+`python -m embroider.serve` puts one model of any kind behind HTTP in
+the llama.cpp shapes (`/v1/embeddings` with `task`,
+`/v1/images/embeddings`, `/v1/rerank`, `/v1/systemone`, `/tokenize`,
+`/v1/models`). `GET /v1/models` returns the `describe()` identity, so a
+client can tell an embroider host from any other OpenAI-shaped server
+and pin the same `space` it would in process. The host applies the
+model's own prompts; clients send `task`, never prefixes. Measured: a
+hosted model's vectors equal the in-process model's at `abs=0` across
+processes on CPU (`tests/test_serve_live.py`). Routes and payloads:
+[serve.md](serve.md).
 
 ## Conformance and testing philosophy
 

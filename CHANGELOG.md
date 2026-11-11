@@ -3,7 +3,7 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [0.15.0] — unreleased
+## [0.15.0] — 2026-11-11
 
 One way to load, serve and identify a model, for every consumer
 (okfgraph, bobine, Silk).

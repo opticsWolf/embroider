@@ -9,8 +9,13 @@ proof — okfgraph's suite asserts live vectors against them.
 |---|---|---|---|---|
 | 0.7.x | 0.5.x+ | 0.2.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.8.x | 0.5.x+ | 0.3.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
-| 0.11.x + pin bump (unreleased) | 0.6.x+ | 0.14.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
-| 0.13 (planned) | 0.8.1+ (0.9 planned) | 0.15.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.11.x | 0.7.x+ | 0.12.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.12.x | 0.8.1+ | 0.14.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.13.x | 0.8.1+ | 0.15.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
+
+bobine 0.8.1 is the first release whose `[cpu]` / `[gpu]` extras pin ORT
+1.31.1; older bobine extras pin 1.29.0 and can't share an environment
+with okfgraph 0.12+.
 
 Rules:
 
@@ -23,7 +28,8 @@ Rules:
 - **Single pinned ORT**: one `onnxruntime` binary shared by every Rust
   consumer (`ORT_DYLIB_PATH`-overridable). Never float it per project.
 - **Floor pin**: okfgraph 0.7.x requires `embroider>=0.2,<0.3`, 0.8.x
-  requires `embroider>=0.3,<0.4` — the Jina contract moves only with
+  requires `embroider>=0.3,<0.4`, 0.11.x `>=0.12,<0.13`, 0.12.x
+  `>=0.14,<0.15`, 0.13.x `>=0.15,<0.16` — the Jina contract moves only with
   okfgraph releases (0.3.0 adds the vision contract; the text contract
   is untouched, same goldens).
 - **No torch anywhere in the chain**: text embeddings (embroider/Jina) and
