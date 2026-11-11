@@ -756,7 +756,11 @@ mod tests {
         let capi = root.join("Lib").join("site-packages").join("onnxruntime")
             .join("capi");
         std::fs::create_dir_all(&capi).ok();
-        let dll = capi.join("onnxruntime.dll");
+        // The locator applies this platform's file rule (0.15).
+        let lib = if cfg!(windows) { "onnxruntime.dll" }
+            else if cfg!(target_os = "macos") { "libonnxruntime.dylib" }
+            else { "libonnxruntime.so" };
+        let dll = capi.join(lib);
         std::fs::write(&dll, b"x").ok();
         let info = root.join("Lib").join("site-packages")
             .join("onnxruntime_gpu-1.31.1.dist-info");
