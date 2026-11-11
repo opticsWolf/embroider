@@ -245,7 +245,7 @@ let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-
 <section id="stack" aria-labelledby="stack-title">
   <div class="section-intro"><h2 id="stack-title">Part of a trio,<br>usable alone.</h2><div class="prose"><p>embroider ships independently on PyPI and crates.io. It also anchors the embedding side of the OKF stack: OKFgraph owns the knowledge workflow and the embedding-space pins, bobine converts documents — each reusing embroider where it fits, owning its sessions everywhere else.</p><p>CPU and GPU runtime distributions are alternatives: install one ONNX Runtime, not both. The wheels cover Linux, Windows, and macOS-arm64 for Python 3.11–3.13.</p></div></div>
   <div class="package" id="okfgraph">
-    <div class="package-heading"><h3>OKFgraph <span class="ver">0.12.1</span></h3><p>Local knowledge graph + agent memory</p><a class="text-link" href="https://opticswolf.github.io/OKFgraph/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/OKFgraph">Repository <span aria-hidden="true">↗</span></a></div>
+    <div class="package-heading"><h3>OKFgraph <span class="ver">0.13.0</span></h3><p>Local knowledge graph + agent memory</p><a class="text-link" href="https://opticswolf.github.io/OKFgraph/">Website <span aria-hidden="true">↗</span></a> <a class="text-link" href="https://github.com/opticsWolf/OKFgraph">Repository <span aria-hidden="true">↗</span></a></div>
     <div class="prose"><p>Uses the full Jina v5 text + vision contract: hybrid retrieval over LadybugDB, model-free PPR when no session is loaded, golden-pinned parity against a numpy replication. The first embedding operation downloads weights; everything cold stays cold until then.</p></div>
   </div>
   <div class="package" id="bobine">
@@ -253,7 +253,7 @@ let policy = embroider::SessionPolicy::text_embed();</code></pre><a class="text-
     <div class="prose"><p>Reuses the ONNX plumbing — session policy, provider fallback, CUDA probe — for TexTeller, layout, OCR, and table sessions it fetches and owns itself. The recipe is public: any compatible model can follow it with no registry change.</p></div>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Package versions"><table><caption>Published stack</caption><thead><tr><th scope="col">Responsibility</th><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
-    <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.12.1</td></tr>
+    <tr><th scope="row">Knowledge graph · retrieval · MCP</th><td><a href="https://pypi.org/project/okfgraph/">okfgraph</a></td><td>0.13.0</td></tr>
     <tr><th scope="row">PDF / Office conversion</th><td><a href="https://pypi.org/project/bobine/">bobine</a></td><td>0.8.1</td></tr>
     <tr><th scope="row">Embeddings + rerank + decisions · runtime policy</th><td><a href="https://pypi.org/project/embroider/">embroider</a></td><td>0.15.0</td></tr>
     <tr><th scope="row">Inference runtime (CPU or GPU)</th><td>onnxruntime</td><td>1.31.1</td></tr>
