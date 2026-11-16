@@ -197,6 +197,31 @@ def test_describe_reads_the_landed_settings_and_the_snapshot(monkeypatch):
     assert model.space == identity["space"]
 
 
+def test_a_fused_vision_slot_names_its_text_partner_space(monkeypatch):
+    """W3: a Gemma image vector is (text fusion, tower), so describe()
+    carries the partner text space, not only the vision tower's."""
+    from embroider import _models
+
+    class Native:
+        dim = 768
+        used_cuda = True
+        max_length = 0
+        precision = "fp16"
+
+    def cache_info(model_id, *args, **kwargs):
+        rev = ("a" if model_id.endswith("-vision") else "b") * 40
+        return {"snapshot_path": f"/hub/{model_id}/snapshots/{rev}"}
+
+    monkeypatch.setattr(_models._native, "cache_info", cache_info)
+    model = _models.Model("vision", "google/embeddinggemma-2-vision",
+                          Native(), {"truncate_dim": 768})
+    identity = model.describe()
+    assert identity["text_partner"] == "google/embeddinggemma-2"
+    assert identity["text_partner_space"] == embroider.space_id(
+        "google/embeddinggemma-2", "b" * 40, "fp16", 768, 8192, "text_embed")
+    assert model.text_space == identity["text_partner_space"]
+
+
 def test_a_task_model_has_no_space(monkeypatch):
     from embroider import _models
 

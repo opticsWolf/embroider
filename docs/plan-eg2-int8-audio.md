@@ -45,7 +45,7 @@ tower, then the text session with `image_features`, `video_features` and
 - `EMBEDGEMMA2_VISION`: fp32 + fp16 + int8 (same mirror,
   `vision_encoder_quantized.onnx`); `text_partner` set; fp16-on-CPU
   refused (the tower NaNs under emulated fp16 — `docs/compat.md`). The
-  image gates are still open; the artifact alone changes no default.
+  image gates passed on 2026-11-16; the artifact alone changes no default.
 - No audio slot, no audio artifacts, no `/v1/audio/embeddings` route.
 - Precision policy: `auto` = CUDA→fp16, CPU→fp32; `auto` never resolves
   to int8; unlisted tiers fall back to fp32 and `describe()` reports what
@@ -98,11 +98,11 @@ tower, then the text session with `image_features`, `video_features` and
 - **Live proof**: a temp graph on CPU reports `precision=int8`, `space`
   `…@52614d7…:int8:768:8192:text_embed:v1`, reembed keeps int8, and an
   fp32 reopen raises `PRECISION_PIN_MISMATCH`.
-- **Still open**: the vision cross-modal gate, the mixed-pair product
-  rule, and the audio slot. The labelled text-retrieval gate passed on
-  2026-11-16 (scifact + nfcorpus, 768/512; `OKFgraph/docs/eg2-int8-gates.md`).
-  The image lane has no okf/Silk consumer yet beyond the pin. See
-  `plan-eg2-rollout.md` §3–§4.
+- **Still open**: the audio slot. The labelled text-retrieval gate and the
+  vision cross-modal gate passed on 2026-11-16; the mixed-pair rule is
+  decided and enforced (`OKFgraph/docs/eg2-int8-gates.md`). The image lane
+  now has the W3 fusion pin and Silk preflight. See `plan-eg2-rollout.md`
+  §3–§4.
 
 ## 1. Non-goals
 
@@ -170,16 +170,15 @@ Concretely, an image vector built with text fp16 is not comparable to a
 text vector from a graph at text int8, even if the vision tower and width
 are identical.
 
-Today this is safe **by construction, not by an explicit pin**:
+Today this is safe **by two explicit pins plus a reembed refusal**:
 
-- the text precision pin is fail-closed, so a graph can never reopen at a
-  different `P_text`;
+- W3 stores `embedding_image_text_space` and compares it with the graph's
+  text space at the first image open; the text precision pin remains
+  fail-closed;
 - `reembed` refuses when `ImageAsset` rows exist, so image vectors cannot
   survive a text-space change.
 
-That is an invariant by omission: two independent mechanisms happen to
-cover it. The int8 work must not weaken either, and the audio lane needs
-the same treatment before it ships.
+The audio lane needs the same fusion pin before it ships.
 
 ### 2.3 What is safe / unsafe
 
@@ -187,14 +186,14 @@ the same treatment before it ships.
 |---|---|
 | text fp16 + vision fp16 (today) | safe, pinned |
 | text int8 + vision int8 | safe *after* the pin codec learns int8 |
-| text fp16 + vision fp32 (or the reverse) | safe; each tower is pinned separately; quality is the tower's own parity question |
-| text int8 + vision fp16 | safe mechanically (both pinned); quality is dominated by the int8 fusion — accept or reject on retrieval eval, not on cosine |
+| text fp16 + vision fp32 (or the reverse) | **not supported for Gemma**: the fusion text tower runs at the image precision, so W3 refuses a mismatch. Jina's vision slot has no text fusion tower, but do not assume mixed precision there without its own gate. |
+| text int8 + vision fp16 | **not supported for Gemma**: `GemmaVision` runs the partner text tower at the image precision, so the image vector is fused in fp16 and does not match the int8 text space. W3 refuses it; use both int8 or no image lane. |
 | reopen a graph at another `P_text` | unsafe; must never be possible |
 | re-embed text under `ImageAsset` rows | unsafe; refused today, keep it refused (fresh graph or re-encode media) |
 | image vectors carried into a graph embedded at another text precision | unsafe; blocked by the text pin + reembed refusal |
 | assuming publisher whole-model dtype numbers transfer to arbitrary combinations | unsafe; each combination needs its own end-to-end gate |
 
-### 2.4 What to add (W3, small, precedes the UI)
+### 2.4 What W3 added (landed 2026-11-16)
 
 1. Extend the precision codec to int8 **once**, for text and image pins
    (§3.3) — `_PRECISION_CODE`, `stored_precision`,
@@ -515,14 +514,14 @@ use it for sizing, not for search.
 | int8 text retrieval | repo eval set | NDCG@10 / recall@20 delta ≤ 0.5 pt |
 | int8 throughput | probe | CPU and CUDA recorded; CPU ~0.6 docs/s, CUDA ≈fp32 (38.6 vs 38.4); size, not speed |
 | vision fp16 e2e | existing | already 1.0 CUDA, refused on CPU |
-| vision int8 e2e + cross-modal | gate | text-query→image retrieval delta ≤ 0.5 pt |
+| vision int8 e2e + cross-modal | gate | passed 2026-11-16: COCO 1k, text→image and image→text deltas ≤ 0.40 pt |
 | audio front end parity | golden features | ≤ 1e-4 vs processor |
 | audio e2e cross-modal | probe | text-query→audio Hit@1 sanity, no NaN |
 | pin codec | okf tests | int8/fp16/fp32 cross-refusals, reembed re-pin |
 | int8 image path | okf tests | router/settings accept int8; vision pin writes 8; fp16 reopen refused |
 | unknown precision code | okf tests | graph refuses, never adopts |
 | reembed unnamed precision | okf tests | refuses, leaves no mixed model/precision pin |
-| mixed-precision pair | okf tests | tower change refused; text change refused with media present |
+| mixed-precision pair | okf/Silk tests | Gemma text-int8 + vision-fp16 refused; same-precision pair only |
 | 256d rebuild (option) | real copy | vectors −3×; file −26% on the long-text run (−18% on the dummy); retrieval delta ≤ 0.5 pt |
 
 ## 7. Sequence and current status
@@ -536,10 +535,11 @@ use it for sizing, not for search.
    reembed path are **landed** (`95ff50c`, `4eaf1e2`, `d455bc2`); the
    labelled retrieval gate passed 2026-11-16. The reembed-a-copy check
    remains open; image graphs need a fresh DB + re-encode.
-3. **M2 — pins for mixed precision (W3).** Fusion identity for media and
-   the audio pin trio are **not yet implemented**; they must precede any
-   audio UI and the int8 image lane. The mixed-pair default is still a
-   product decision.
+3. **M2 — pins for mixed precision (W3).** Fusion identity for media is
+   **landed** (`embedding_image_text_space`, `text_partner_space` in
+   embroider, Silk preflight); the audio pin trio waits with the audio
+   slot. Mixed Gemma text/vision precision is refused because the host
+   fuses at the image precision.
 4. **M2b — database size (option).** Measure a real graph with the temp
    reporter; if vectors dominate and quality allows, plan a fresh 256d
    import. No engine work, no image-policy change.
@@ -589,6 +589,11 @@ questions is `docs/plan-eg2-rollout.md` §4.
 - **Per-component dtype measurements** in the publisher's table are
   whole-model; combinations (e.g. text fp16 + audio q8) are untested
   upstream and need their own e2e gate.
+- **fp16 is not the model card's recommended dtype.** The official card
+  says bfloat16 or float32 and warns that fp16 can NaN or silently
+  degrade; this stack's fp16 artifacts are parity-gated and vision
+  fp16-on-CPU is refused, but do not treat fp16 as official quality. The
+  int8 gate includes both fp32 and fp16 baselines.
 - **Vision fp16 NaN on CPU emulation** is already a documented refusal;
   audio should be assumed to behave the same until measured, so never
   offer fp16-on-CPU for the towers.

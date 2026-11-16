@@ -142,7 +142,8 @@ class Model:
         ``engine_version``, ``contract``, ``revision``, ``device``,
         ``precision``, ``max_length``, ``family``. Embed and vision kinds
         add ``dim``, ``native_dim``, ``ladder``, ``tuning`` and ``space``;
-        vision adds ``text_partner``.
+        vision adds ``text_partner`` and, for a fused Gemma slot, the
+        partner text space the image vectors were fused under.
         """
         if self._identity is None:
             self._identity = self._describe()
@@ -178,8 +179,23 @@ class Model:
                 "tuning": TUNING[self.kind],
             })
             if self.kind == "vision":
-                identity["text_partner"] = row.get("text_partner", "")
+                partner = row.get("text_partner", "")
+                identity["text_partner"] = partner
                 identity["max_length"] = 0
+                # A fused Gemma slot runs the partner text tower at the same
+                # precision. The image vector's identity is therefore
+                # (vision tower, text fusion space), not the tower alone.
+                # Jina's vision slot has no text tower; leave its fusion
+                # space empty rather than invent one.
+                if (partner
+                        and self.model_id.startswith(
+                            "google/embeddinggemma-2-vision")):
+                    partner_rev = resolved_revision(
+                        partner, self.options.get("revision"),
+                        self.options.get("cache_dir"), precision)
+                    identity["text_partner_space"] = space_id(
+                        partner, partner_rev, precision, dim,
+                        int(row.get("max_tokens") or 8192), "text_embed")
             identity["space"] = space_id(
                 self.model_id, identity["revision"], precision, dim,
                 identity["max_length"], TUNING[self.kind])
@@ -189,6 +205,11 @@ class Model:
     def space(self) -> Optional[str]:
         """The vector-space identity (embed and vision kinds), else ``None``."""
         return self.describe().get("space")
+
+    @property
+    def text_space(self) -> Optional[str]:
+        """A fused vision slot's partner text space, else ``None``."""
+        return self.describe().get("text_partner_space")
 
     def tokenize(self, text: str) -> Optional[List[int]]:
         """Token ids for *text*, or ``None`` when the tokenizer won't open.

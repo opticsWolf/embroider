@@ -15,14 +15,17 @@ All notable changes to `embroider` are documented here. Format follows
   mirrored but has no slot or route yet.
 - **Live int8 identity.** `describe()` reports the landed `int8`
   precision and the full space, so okfgraph can pin it like any other
-  tier. The text tier passed the labelled scifact/nfcorpus retrieval gate
-  at 768/512 (2026-11-16); the vision cross-modal gate is still open.
+  tier. The text tier passed the labelled scifact/nfcorpus gate at
+  768/512 and the vision tier passed the COCO cross-modal gate
+  (2026-11-16). A fused Gemma slot now also reports
+  ``text_partner_space``; text and image precision must match.
 
 ### Docs
 
 - `docs/compat.md` records the mirror and the measured status;
-  `docs/quickref.md` names the self-hosted vision q8 graph and its open
-  gate; `docs/plan-eg2-rollout.md` is the execution reference.
+  `docs/quickref.md` names the self-hosted vision q8 graph, its passed
+  cross-modal gate and the matching text/image precision rule;
+  `docs/plan-eg2-rollout.md` is the execution reference.
 
 ## [0.15.0] — 2026-11-11
 

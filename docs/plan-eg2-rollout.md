@@ -1,6 +1,6 @@
 # EmbeddingGemma 2 — target architecture, rollout plan, and next steps
 
-Status: **2026-11-16**, after the int8 text/vision landing and the N1/N3
+Status: **2026-11-16**, after the int8 text/vision landing and the N1/N2/N3
 gates. This is the
 consolidated execution plan; the detailed research and workstreams stay in
 `plan-eg2-int8-audio.md`, and the measurements stay in
@@ -94,9 +94,12 @@ involved.
 | okf precision codec | `int8: 8`, both decoders/enforcers, fail-closed unknown codes | `4eaf1e2` |
 | okf image lane | router/settings accept `image_precision="int8"`; caller, stored decode, content-hash, doctor | `4eaf1e2` |
 | okf `pin_info` | text + image pins; `image_mismatch`; external host precision | `4eaf1e2` |
+| okf fusion pin (W3) | `embedding_image_text_space`; host `text_partner_space`; mismatch refused | 2026-11-16 |
 | reembed | validates precision before rewriting; writes a named pin; clears an unnamed pin; reads the landed precision after open | `4eaf1e2` |
 | Silk/Weave | EG2 text and vision offer int8; loader rows and Q5 pick them up | `d455bc2` / `b38784a` |
 | Text retrieval gate | int8 vs fp32 at 768/512, scifact + nfcorpus: NDCG@10 delta ≤ 0.16 pt | `OKFgraph/docs/eg2-int8-gates.md`, 2026-11-16 |
+| Vision gate | int8 vs fp32/fp16 on COCO 1k: all deltas ≤ 0.40 pt; CPU/CUDA live encode finite | `OKFgraph/docs/eg2-int8-gates.md`, 2026-11-16 |
+| Fusion rule | Gemma text/vision precision must match; okf pin + Silk preflight | tests, 2026-11-16 |
 | Downgrade check | okfgraph 0.14.2 refused the int8 graph through the space pin | `OKFgraph/docs/compat.md`, 2026-11-16 |
 | Tests | okf full suite 1339 passed / 7 skipped; Silk 1505 passed / 3 skipped / 1 deselected; S7 ONNX-host file 11 passed | 2026-11-15 / 2026-11-16 |
 
@@ -110,13 +113,11 @@ fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 
 | # | Item | Why it matters | Blocking? |
 |---|---|---|---|
-| 1 | **Vision int8 live + cross-modal gate** | vision q8 is registered but no image has been encoded; image→text retrieval is unmeasured | yes, for image int8 |
-| 2 | **Mixed-pair product rule** | code allows text int8 + vision fp16; plan default is text int8 + vision int8 (or no image lane) | yes, for image int8 |
-| 3 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
-| 4 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
-| 5 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display only reads text precision; no image precision preflight | no, polish |
-| 6 | **Release/rollout** | commits are local, no version bump/changelog/tag; Weave is far ahead of its remote | operational |
-| 7 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
+| 1 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
+| 2 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
+| 3 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display still needs the fusion/precision row, and the server refuses at first image encode | no, polish |
+| 4 | **Release/rollout** | commits are local, no version bump/changelog/tag; Weave is far ahead of its remote | operational |
+| 5 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
 
 ---
 
@@ -143,21 +144,26 @@ and +0.12/−0.03 pt; the NDCG@10 and recall@20 deltas are inside the
 Harness: `OKFgraph/scripts/eval_precision.py`; record:
 `OKFgraph/docs/eg2-int8-gates.md`.
 
-### N2 — Vision int8 end-to-end (owner: embroider + Silk)
+### N2 — Vision int8 end-to-end (owner: embroider + Silk) — **done 2026-11-16**
 
 1. Live encode one image through `EMBEDGEMMA2_VISION.int8` on CPU and
    CUDA; verify finite output, shape and the fusion path.
-2. Run the cross-modal gate: text query → image retrieval vs fp16, same
-   corpus; delta ≤ 0.5 pt.
-3. Decide the mixed-pair rule. Default: text int8 + vision int8, or no
-   image lane. If mixed text-int8 + vision-fp16 is allowed, gate that
-   pair explicitly and ensure the image space names the text fusion.
-4. If the default is enforced, add the refusal in `okfgraph` (pre-boot
-   or first vision open) and a Silk row-level check.
+2. Run the cross-modal gate: text query → image retrieval vs fp16/fp32,
+   same corpus; delta ≤ 0.5 pt.
+3. Decide the mixed-pair rule. **Decided:** text int8 + vision int8, or
+   no image lane. Gemma fuses at the image precision, so mixed text-int8
+   + vision-fp16 is not a valid pair.
+4. Enforce it: okf's W3 pin refuses at the first image open and Silk's
+   image preflight refuses before starting the host.
 
-Files: `src/vision.rs` / `src/gemma.rs`, `okfgraph/components/embedding.py`,
-`okfgraph/router.py`, `weave/plugins/silk/functions/okf_wiring.py`,
-`nodes/knowledge_graph.py`, tests.
+**Result (2026-11-16):** pass. One image encoded on CPU and CUDA int8:
+finite, 768-d, unit norm; CPU/CUDA cos 1.0. On `JotDe/mscoco_1k`
+(199 images, 995 captions), int8 vs fp32 deltas were ≤ 0.40 pt in both
+directions. W3 now carries `text_partner_space` and
+`embedding_image_text_space`; Gemma text/vision precision must match
+because the fusion tower runs at the image precision. Silk refuses a
+mismatch before starting the image host. Record:
+`OKFgraph/docs/eg2-int8-gates.md` (N2).
 
 ### N3 — Downgrade / mixed-version check (owner: okfgraph) — **done 2026-11-16**
 
@@ -177,12 +183,12 @@ already covers the fail-closed unknown-code path.
 - Changelog entries: embroider (artifact/mirror), okfgraph (pin codec,
   image lane, reembed), Silk (rows). Both changelogs have an
   `[Unreleased]` section.
-- Docs ready: `OKFgraph/docs/eg2-int8-gates.md` (N1 + N3),
+- Docs ready: `OKFgraph/docs/eg2-int8-gates.md` (N1 + N2 + N3),
   `OKFgraph/docs/compat.md`, `OKFgraph/docs/bench-eg2-precision-width.md`,
   embroider `README` / `docs/quickref.md` / `docs/compat.md`, Silk
   `docs/NODES.md` and `docs/ONNX_UNIFICATION_PLAN.md`. The release note
   must keep saying text int8 is explicit and measured, vision int8's
-  cross-modal gate is open, and int8 does not shrink the database.
+  cross-modal gate passed, and int8 does not shrink the database.
 - Version decision and tag; push the local commits.
 - Weave: decide the `dev` push (it was already ahead of `origin/dev`
   before this work).
@@ -207,9 +213,10 @@ quantization is a separate engine project, only after measurement.
 
 ### N7 — UI / preflight polish (owner: Silk)
 
-- Surface `image_mismatch` in the KG pin display.
-- Add an image-precision preflight (server refuses at first image encode
-  today).
+- Surface `image_mismatch` (including the new text-space mismatch) in the
+  KG pin display.
+- The image-precision/fusion preflight is in `okf_wiring`; the server
+  still refuses again at first image encode.
 - Keep the warm-pool node UI on the earlier S4 list; the reranker
   `max_tokens` wording (S8) is verified and unrelated to int8.
 
@@ -231,8 +238,8 @@ quantization is a separate engine project, only after measurement.
 | text retrieval (labelled) | **pass 2026-11-16** | scifact + nfcorpus, 768/512; NDCG delta ≤ 0.16 pt (`eg2-int8-gates.md`) |
 | text pin cross-refusals | **done** | `4eaf1e2` + tests |
 | image pin paths | **done** | router/settings/caller/decode/hash/pin_info |
-| vision int8 e2e / cross-modal | **open** | no live image encode yet |
-| mixed-pair rule | **open** | code allows; product default undecided |
+| vision int8 e2e / cross-modal | **pass 2026-11-16** | COCO 1k, 199 images/995 captions; deltas ≤ 0.40 pt (`eg2-int8-gates.md`) |
+| mixed-pair rule | **decided 2026-11-16** | Gemma text/vision precision must match; okf + Silk refuse mixed |
 | audio front end / e2e | **open** | W2 not started |
 | DB width (256d) | **option** | 26% smaller file; fresh DB needed |
 | downgrade from 0.14.2 | **pass 2026-11-16** | space pin refused the int8 graph (`compat.md`) |
@@ -315,8 +322,9 @@ print(m.encode("which planet is closest to the Sun", task="query").shape)
 1. ~~Which labelled set is the retrieval gate, and what is the acceptable
    delta on it?~~ Closed: scifact + nfcorpus, NDCG@10/recall@20 ≤ 0.5 pt,
    both passed 2026-11-16.
-2. Is text int8 + vision fp16 allowed, or is the product rule “both int8
-   or no image lane”?
+2. ~~Is text int8 + vision fp16 allowed, or is the product rule “both
+   int8 or no image lane”?~~ Closed: Gemma fuses at the image precision;
+   mixed is refused. Both int8 or no image lane.
 3. ~~Does the previous okfgraph release refuse a new int8 graph via the
    space pin, or does it need a version floor?~~ Closed: 0.14.2 refuses
    through the space pin; no floor needed.

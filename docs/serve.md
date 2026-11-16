@@ -91,6 +91,11 @@ revision (`?` when unknown, which never matches) and the vector contract
 device is not part of it: CPU and CUDA sessions at one precision serve
 one space, as graph pins always treated them.
 
+A fused vision slot adds `text_partner` and `text_partner_space`: image
+vectors run through the partner text tower at the image precision, so
+the pair `(text_partner_space, space)` is the actual vector space, not
+the vision tower alone. Gemma text and image precision must match.
+
 The host opens the model with `embroider.open`, exactly as an in-process
 caller does, so the vectors match bit for bit across processes;
 `tests/test_serve_live.py` pins that at `abs=0` on CPU.

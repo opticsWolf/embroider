@@ -39,8 +39,9 @@ embroider.KINDS        # embed, vision, rerank, decide, decide-laya, decide-2b
 embroider.OPEN_KWARGS  # what each kind's open takes (others: TypeError)
 m.describe()           # id, kind, engine_version, contract, revision (sha), device,
                        # precision, max_length, family; embed/vision: dim, native_dim,
-                       # ladder, tuning, space
+                       # ladder, tuning, space; fused vision: text_partner_space
 m.space                # "embroider/<id>@<sha>:<prec>:<dim>:<max_len>:<tuning>:v1"
+m.text_space           # fused vision only: the partner text space
 m.tokenize("text")     # token ids, or None when no tokenizer opens by id
 m.encode_batch([...], task="Query")   # everything else: the native model's own call
 ```
@@ -124,8 +125,9 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8
 m = JinaV5.open("google/embeddinggemma-2", precision="int8")
 ```
 
-Text int8 passed the labelled scifact/nfcorpus retrieval gate at 768/512
-(2026-11-16); vision int8's cross-modal gate is still open.
+Text int8 passed the labelled scifact/nfcorpus gate at 768/512 and
+vision int8 passed the COCO cross-modal gate (2026-11-16). Gemma text
+and image precision must match: the fusion tower runs at image precision.
 
 `open(model_id, revision=None, cache_dir=None, truncate_dim=512,
 device="auto", max_length=None, precision=None, cpu_arena=False)` —
@@ -178,7 +180,8 @@ resolution contract. `auto` precision → fp16 on CUDA / fp32 on CPU;
 explicit fp16-on-CPU is an error in both slots (the Jina graph stalls on
 CPU; the Gemma tower NaNs under emulated fp16 — fail fast either way).
 An explicit `int8` uses the self-hosted vision q8 graph; it is never
-selected by `auto`. Its cross-modal gate is still open.
+selected by `auto`. It passed the COCO cross-modal gate; Gemma text and
+image precision must match.
 
 ```python
 from embroider import JinaV5Vision, vision_target_size
