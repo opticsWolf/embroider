@@ -116,7 +116,7 @@ fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 | 1 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
 | 2 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
 | 3 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display still needs the fusion/precision row, and the server refuses at first image encode | no, polish |
-| 4 | **Release/rollout** | embroider 0.15.1 is tagged and published; okfgraph 0.15.0 has the pin/floor prep on `main`, tag/publish pending; Weave is far ahead of its remote | operational |
+| 4 | **Release/rollout** | embroider 0.15.1 and okfgraph 0.15.0 are tagged and published; Weave is far ahead of its remote | operational |
 | 5 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
 
 ---
@@ -189,12 +189,12 @@ already covers the fail-closed unknown-code path.
   `docs/NODES.md` and `docs/ONNX_UNIFICATION_PLAN.md`. The release note
   must keep saying text int8 is explicit and measured, vision int8's
   cross-modal gate passed, and int8 does not shrink the database.
-- Version decision is applied; 0.15.1 is on PyPI and crates.io. OKFgraph
-  now floors `embroider>=0.15.1,<0.16` and its lock resolves 0.15.1, so
-  W3's fusion identity is guaranteed.
+- Version decision is applied. embroider 0.15.1 and okfgraph 0.15.0 are
+  on PyPI and crates.io; okfgraph floors `embroider>=0.15.1,<0.16` and
+  its lock resolves 0.15.1, so W3's fusion identity is guaranteed.
 - Weave: decide the `dev` push (it was already ahead of `origin/dev`
   before this work).
-- OKFgraph tag/publish still requires an explicit go.
+- Both release tags are pushed; no further release action is pending.
 
 ### N5 — Audio slot (owner: embroider, then okf/Silk)
 
@@ -245,7 +245,7 @@ quantization is a separate engine project, only after measurement.
 | audio front end / e2e | **open** | W2 not started |
 | DB width (256d) | **option** | 26% smaller file; fresh DB needed |
 | downgrade from 0.14.2 | **pass 2026-11-16** | space pin refused the int8 graph (`compat.md`) |
-| release/push | **partial** | embroider 0.15.1 tagged/published; okf 0.15.0 untagged |
+| release/push | **done 2026-11-16** | embroider 0.15.1 and okfgraph 0.15.0 tagged/published |
 
 ---
 
