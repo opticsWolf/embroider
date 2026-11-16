@@ -47,6 +47,9 @@ pub const EMBEDGEMMA2_REPO: &str = "onnx-community/embeddinggemma-2-ONNX";
 /// FP16 mirror (CUDA serving): upstream `model_fp16` bytes renamed to the
 /// `onnx/model.onnx` layout (Jina-small-mirror convention).
 pub const EMBEDGEMMA2_FP16_REPO: &str = "opticsWolf/embeddinggemma-2-onnx-fp16";
+/// Self-hosted int8 mirror (text + vision + audio quantized graphs), pinned
+/// to the mirror's commit. Same bytes as `onnx-community` at `daa72c5`.
+pub const EMBEDGEMMA2_INT8_REPO: &str = "opticsWolf/embeddinggemma-2-onnx-int8";
 /// Vision-slot id for EmbeddingGemma 2 (Apache-2.0). Synthetic id like
 /// `jina-v5-omni-nano-retrieval-vision`: there is no vision-only HF repo.
 /// The artifact is the standalone SigLIP-style vision tower
@@ -192,7 +195,12 @@ pub const EMBEDGEMMA2: ModelSpec = ModelSpec {
         sidecar: None,
         revision: Some("296b2a67735a025ed90e2967d58aba6a41233535"),
     }),
-    int8: None,
+    int8: Some(Artifact {
+        repo: EMBEDGEMMA2_INT8_REPO,
+        file: "onnx/model_quantized.onnx",
+        sidecar: Some("onnx/model_quantized.onnx_data"),
+        revision: Some("52614d767029dd71817689c0bde0a0146c5cc0f0"),
+    }),
     text_partner: None,
 };
 
@@ -220,7 +228,12 @@ pub const EMBEDGEMMA2_VISION: ModelSpec = ModelSpec {
         sidecar: None,
         revision: Some("daa72c51243991dfcaf9f9137d2c573d8f7790c0"),
     }),
-    int8: None,
+    int8: Some(Artifact {
+        repo: EMBEDGEMMA2_INT8_REPO,
+        file: "onnx/vision_encoder_quantized.onnx",
+        sidecar: Some("onnx/vision_encoder_quantized.onnx_data"),
+        revision: Some("52614d767029dd71817689c0bde0a0146c5cc0f0"),
+    }),
     text_partner: Some(EMBEDGEMMA2_MODEL),
 };
 
@@ -1636,7 +1649,18 @@ mod tests {
         let fp16 = artifact_for(EMBEDGEMMA2_MODEL, Precision::Fp16);
         assert_eq!((fp16.repo.as_str(), fp16.file.as_str()), (EMBEDGEMMA2_FP16_REPO, "onnx/model_fp16.onnx"));
         let int8 = artifact_for(EMBEDGEMMA2_MODEL, Precision::Int8);
-        assert_eq!((int8.repo.as_str(), int8.file.as_str()), (EMBEDGEMMA2_REPO, "onnx/model.onnx"));
+        assert_eq!(
+            (int8.repo.as_str(), int8.file.as_str()),
+            (EMBEDGEMMA2_INT8_REPO, "onnx/model_quantized.onnx")
+        );
+        assert_eq!(
+            int8.sidecar().as_deref(),
+            Some("onnx/model_quantized.onnx_data")
+        );
+        assert_eq!(
+            model_artifact_precision(EMBEDGEMMA2_MODEL, Precision::Int8),
+            Precision::Int8
+        );
     }
 
     #[test]
@@ -1655,6 +1679,19 @@ mod tests {
         assert_eq!(
             (fp16.repo.as_str(), fp16.file.as_str()),
             (EMBEDGEMMA2_REPO, "onnx/vision_encoder_fp16.onnx")
+        );
+        let int8 = artifact_for(EMBEDGEMMA2_VISION_MODEL, Precision::Int8);
+        assert_eq!(
+            (int8.repo.as_str(), int8.file.as_str()),
+            (EMBEDGEMMA2_INT8_REPO, "onnx/vision_encoder_quantized.onnx")
+        );
+        assert_eq!(
+            int8.sidecar().as_deref(),
+            Some("onnx/vision_encoder_quantized.onnx_data")
+        );
+        assert_eq!(
+            model_artifact_precision(EMBEDGEMMA2_VISION_MODEL, Precision::Int8),
+            Precision::Int8
         );
     }
 

@@ -119,8 +119,9 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-small-retrieval",
 # someone else's compatible repo (Jina layout: onnx/model.onnx + tokenizer.json)
 m = JinaV5.open("myorg/my-encoder")
 
-# int8: nano only, explicit opt-in (auto never resolves here)
+# int8: explicit opt-in (auto never resolves here) — nano and gemma-2 text
 m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8")
+m = JinaV5.open("google/embeddinggemma-2", precision="int8")
 ```
 
 `open(model_id, revision=None, cache_dir=None, truncate_dim=512,
@@ -144,7 +145,7 @@ time; pass `True` only when peak throughput beats memory pressure.
 |---|---|
 | `"auto"` (default) | Follows the *landed* device: CUDA→fp16, CPU→fp32 |
 | `"fp32"` / `"fp16"` | Pinned (fp16 selects the mirror artifact for the default id) |
-| `"int8"` | Nano only; deployment choice, never automatic |
+| `"int8"` | Nano and gemma-2 text; deployment choice, never automatic |
 | `"q8"` | Weight-only int8 where listed (decider-2b, v4-edge, Laya×3, rerankers); deployment choice, never automatic |
 
 `truncate_dim`: Matryoshka ladder only, 32–1024 (nano tops at 768).
@@ -155,7 +156,8 @@ time; pass `True` only when peak throughput beats memory pressure.
 to FP32 weights instead of stranding FP16 on CPU (FP16-on-CPU runs >40x
 slower than FP32-CPU — measured). `fp16` maps the default id to the published
 FP16 mirror repo
-(`opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16`); explicit model ids always win untouched. An explicit
+(`opticsWolf/jina-embeddings-v5-text-small-retrieval-onnx-fp16`); explicit model ids always win untouched. The gemma-2 int8 graphs serve from
+`opticsWolf/embeddinggemma-2-onnx-int8` (text + vision + audio). An explicit
 `fp16`-on-CPU warns loudly but is honoured for text. Do not mix precisions
 in one index — FP32 vs FP16 weights shift vectors, same as mixing tuning
 levels.
@@ -172,6 +174,8 @@ bicubic — anything else is rejected rather than embedded under the wrong
 resolution contract. `auto` precision → fp16 on CUDA / fp32 on CPU;
 explicit fp16-on-CPU is an error in both slots (the Jina graph stalls on
 CPU; the Gemma tower NaNs under emulated fp16 — fail fast either way).
+An explicit `int8` uses the published vision q8 graph; it is never selected
+by `auto`.
 
 ```python
 from embroider import JinaV5Vision, vision_target_size

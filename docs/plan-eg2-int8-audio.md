@@ -34,24 +34,30 @@ tower, then the text session with `image_features`, `video_features` and
 
 ### Current state
 
-- `EMBEDGEMMA2`: fp32 + fp16, `int8: None`, 8K, ladder 128/256/512/768.
-  Text fp16 is parity-gated: 2.1e-4 max abs vs fp32, cosine ~1.0
-  (`docs/compat.md`).
-- `EMBEDGEMMA2_VISION`: fp32 + fp16, `text_partner` set; fp16-on-CPU
-  refused (the tower NaNs under emulated fp16 — `docs/compat.md`).
+- `EMBEDGEMMA2`: fp32 + fp16 + int8 (self-hosted mirror
+  `opticsWolf/embeddinggemma-2-onnx-int8` @ `52614d7`, upstream
+  `model_quantized.onnx`); `auto` never resolves to int8, and an
+  unmeasured request still falls back to fp32. 8K, ladder
+  128/256/512/768. Text fp16 is parity-gated: 2.1e-4 max abs vs fp32,
+  cosine ~1.0 (`docs/compat.md`).
+- `EMBEDGEMMA2_VISION`: fp32 + fp16 + int8 (same mirror,
+  `vision_encoder_quantized.onnx`); `text_partner` set; fp16-on-CPU
+  refused (the tower NaNs under emulated fp16 — `docs/compat.md`). The
+  image gates are still open; the artifact alone changes no default.
 - No audio slot, no audio artifacts, no `/v1/audio/embeddings` route.
 - Precision policy: `auto` = CUDA→fp16, CPU→fp32; `auto` never resolves
   to int8; unlisted tiers fall back to fp32 and `describe()` reports what
   loaded.
-- okf pins: text model + precision `{fp16: 16, fp32: 32}` + space;
-  image model + precision (same codec) + image space; `reembed` refuses
-  when `ImageAsset` rows exist; `space` =
+- okf pins: text model + precision `{int8: 8, fp16: 16, fp32: 32}` +
+  space; image model + precision (same codec) + image space; `reembed`
+  refuses when `ImageAsset` rows exist; `space` =
   `embroider/<model>@<rev>:<precision>:<dim>:<max_length>:<tuning>:<contract>`.
 
 ### Decisions this plan makes
 
-1. **int8 is a pin-codec change before it is an artifact change.** The
-   artifact is a day; the codec is what keeps graphs honest.
+1. **The artifact is registered; the pin codec is still the gate.** The
+   graphs are on the self-hosted mirror; the codec is what keeps them
+   honest.
 2. **Mixed precision is legal per lane.** The unit of a vector space is
    the `(text fusion, tower)` pair; media pins must name the fusion
    identity, not only the tower.
@@ -68,7 +74,26 @@ tower, then the text session with `image_features`, `video_features` and
 7. **Model tiers do not shrink the graph.** Re-embedding under int8
    keeps the same `FLOAT[dim]` payload, so database size is W4's budget:
    256d is an option, int8 storage is a bigger option, and the image-bytes
-   decision stands. `okf db-size` is an option, not a commitment.
+   decision stands. int8 shrinks the model download (314 MB vs 1.08 GB);
+   that is its only size claim. `okf db-size` is an option, not a
+   commitment.
+
+### Status (2026-11-15)
+
+- **Artifact**: text and vision int8 registered on the self-hosted
+  mirror (`opticsWolf/embeddinggemma-2-onnx-int8` @ `52614d7`); `auto`
+  still never selects it. A live `open(..., precision="int8")` reports
+  `int8` and encodes.
+- **okf pin codec**: landed — `int8: 8` in the codec, both decoders and
+  enforcers, unknown codes fail closed, the image caller/settings/hash
+  paths accept int8, `pin_info` compares image pins, and reembed
+  validates the precision before writing (clearing an unnamed pin
+  instead of leaving a lie). Tests cover the cross-refusals.
+- **Silk rows**: landed — EG2 text and vision offer `int8`; the ONNX
+  Loader and KG Q5 checks pick it up through the existing helpers.
+- **Still open**: the labelled retrieval gate (the 50-query run is a
+  signal), the vision cross-modal gate, and the audio slot. The image
+  lane has no okf/Silk consumer yet beyond the pin.
 
 ## 1. Non-goals
 
@@ -180,20 +205,25 @@ into "mixed precision is safe because the (text, tower) pair is pinned".
 
 ## 3. W1 — int8 for the text tower
 
-### 3.1 Artifact
+### 3.1 Artifact — registered
+
+The text and vision q8 graphs are registered on the self-hosted mirror
+(`opticsWolf/embeddinggemma-2-onnx-int8`, commit `52614d7`), byte-identical
+to upstream `daa72c5`:
 
 ```rust
 int8: Some(Artifact {
-    repo: EMBEDGEMMA2_REPO,               // onnx-community/embeddinggemma-2-ONNX
-    file: "onnx/model_quantized.onnx",    // q8; verify name + sidecar at pin time
+    repo: EMBEDGEMMA2_INT8_REPO,          // opticsWolf/embeddinggemma-2-onnx-int8
+    file: "onnx/model_quantized.onnx",    // q8 / dynamic int8
     sidecar: Some("onnx/model_quantized.onnx_data"),
-    revision: Some("<pinned sha>"),
+    revision: Some("52614d767029dd71817689c0bde0a0146c5cc0f0"),
 }),
 ```
 
-Verify the exact filename in the repo tree (the q8 audio file is
-`audio_encoder_quantized.onnx`, so `model_quantized.onnx` is the expected
-twin) and record the per-file sha256 in the manifest convention.
+The vision twin is `EMBEDGEMMA2_VISION.int8` →
+`onnx/vision_encoder_quantized.onnx` + `_data` on the same commit; the
+audio q8 graph is mirrored too but has no slot yet. `auto` still never
+resolves to int8, and `EMBEDGEMMA2.int8` is explicit-only.
 
 **q8 is int8.** transformers.js names the 8-bit tier `q8` and the file
 `model_quantized.onnx`; ONNX Runtime's name for the same recipe is
@@ -222,8 +252,9 @@ is close; the question is retrieval, not cosine".
   if the delta is ≤ 0.5 pt. This is the policy's actual bar — int8 is
   refused for embeddings today because parity does not prove retrieval.
 - Non-finite check: zero NaN/inf across the probe set.
-- Throughput: record CPU tok/s. Expect roughly half of fp32 (already the
-  measured nano result); int8 is a **size** choice, not a speed one.
+- Throughput: record CPU and CUDA separately. CPU int8 was ~0.6 docs/s;
+  the CUDA EP measured **≈fp32** on 2026-11-14 (38.6 vs 38.4 docs/s;
+  q4f16 56.7). int8 is a **size** choice, not a speed one.
 - CUDA: the same q8/q4/q4f16 graphs **do run on the CUDA EP** here
   (ORT 1.31 + cuDNN via `prepare_cuda_runtime()`): 38.6 / 35.0 / 56.7
   docs/s against fp32's 38.4, while the same int8 graph on CPU was
@@ -232,39 +263,109 @@ is close; the question is retrieval, not cosine".
   separately. The CPU lane stays the one every deployment has.
 - Memory: confirm the 314 MB text artifact.
 
+**Evidence already in hand (2026-11-14).** On 1,500 long Wikipedia
+articles (5.2 M chars) q8 measured mean 1−cos 8.5e-4 (p99 2.9e-2)
+against fp32, and on 50 curated queries it matched fp32's retrieval at
+768/512 (R@1 .88, NDCG .956) and stayed within ±2 points at 256/128.
+The model footprint is 314 MB vs 1.08 GB; the graph file is unchanged
+(same `FLOAT[dim]`). This supports the gate but does not replace it:
+50 queries is a signal; the labelled eval set is the decision.
+
 ### 3.3 Pin codec (okfgraph) — the real blocker
 
 - `_PRECISION_CODE = {"int8": 8, "fp16": 16, "fp32": 32}`
-  (`okfgraph/components/embedding.py`); `stored_precision` and
-  `_image_pin_precision` (`okfgraph/ops/admin.py`) decode 8.
-- `_enforce_pins` then enforces int8 like any other precision (it skips
-  values not in the codec — which is exactly the current hole).
-- `reembed`'s re-pin branch is already keyed off the codec; it starts
-  writing the int8 pin automatically. Its ImageAsset refusal stays.
+  (`okfgraph/components/embedding.py:141`); `stored_precision` (`:149`),
+  the two pin enforcers (`:160`, `:456`) and `_image_pin_precision`
+  (`okfgraph/ops/admin.py:792`) decode 8.
+- `_enforce_pins` (`okfgraph/router.py:539-548`) then enforces int8 like
+  any other precision (it skips values not in the codec — exactly the
+  current hole).
+- `reembed`'s re-pin branch (`okfgraph/ops/admin.py:638-643`) is keyed
+  off the codec; it starts writing 8 automatically. Until then it leaves
+  the old fp16/fp32 pin in place — a pin that then lies about the
+  vectors. Its ImageAsset refusal (`okfgraph/ops/admin.py:511-519`)
+  stays.
+- **The model pin cannot cover this.** int8 is the same
+  `google/embeddinggemma-2` id; `enforce_model_pin` compares ids, so an
+  int8 graph looks model-identical to fp16. The precision pin is the only
+  guard. Do not mint a fake `-int8` id: it would split one vector space
+  across two ids and break the one-id-per-space convention.
+- **Image lane:** an `ImageAsset` graph is fresh DB + re-ingest +
+  re-encode, never an in-place reembed. The default product rule is text
+  int8 + vision int8 (or no image lane); mixed vision precision is
+  mechanically legal only with the fusion identity pinned (§2.4), and
+  the quality gate decides.
+- **The image lane's caller also filters the precision.** Extending
+  `_PRECISION_CODE` is not enough there: `router.py:729` calls
+  `enforce_image_precision_pin` only when
+  `precision in ("fp16", "fp32")`, and `_stored_image_precision`
+  (`router.py:710`) maps only 16/32. Both must learn int8 (or use the
+  codec), or an int8 vision session writes no pin while the text lane
+  does.
+- **Image int8 has four more unreachable paths.** `router.py:434`
+  refuses `image_precision="int8"` before any session opens;
+  `settings.py:209` offers only auto/fp32/fp16; `image_assets.py:332`
+  collapses a landed int8 into the fp16/fp32 content-hash bucket; and
+  `doctor.py:301` decodes only 16/32. All four must learn int8, or the
+  lane is either refused up front or misreported.
+- **`pin_info` does not compare image pins.** `admin.py:875-883`
+  reports `image.pinned_model`/`pinned_precision`/`pinned_space` but has
+  no `configured_precision`, no image space comparison and adds nothing
+  to `mismatch`. Add image model/precision/space entries and an
+  `image_mismatch` list (or prefixed names), or Silk cannot display the
+  mismatch it is about to refuse.
+- **Unknown codes must fail closed.** Both enforcers treat an
+  undecodable stored value as "no pin" and return the requested
+  precision without writing (`embedding.py:181-183`, `:468-470`). Once
+  8 decodes this is moot for int8, but keep it fail-closed for the next
+  code: raise `PRECISION_PIN_MISMATCH`/`IMAGE_PIN_MISMATCH`, never
+  accept.
+- **Reembed must validate before it writes.** `admin.py:631-643`
+  writes the model pin first, then writes precision only if the codec
+  knows it; a precision outside the codec leaves a new model next to an
+  old precision. Compute and validate the precision first; refuse (or
+  clear both pins) when it cannot be named.
+- **External hosts:** `pin_info` leaves `configured_precision` at
+  `None` when `backend == "external"` (`admin.py:825-831`), so a host
+  that names int8 but opens fp16 shows no precision mismatch. The host
+  contract already reports `identity.precision` (`external_embedder.py`)
+  — use it in the report.
+- **Database size:** int8 vectors keep `FLOAT[dim]`; the graph file does
+  not shrink. 314 MB is model footprint, not DB.
 - `pin_info()` docstring/reading shape gains int8.
 - `okfgraph/settings.py`: `precision` already accepts int8 ("explicit
   only, needs a measured artifact") — now the artifact exists.
-- Tests: int8 graph refuses an fp16 reopen and vice versa; empty graph
-  adoption; reembed to int8 writes 8 and `pin_info` reports int8; image
-  graph reembed still refused.
+- Tests: int8 graph refuses an fp16/fp32 reopen and vice versa; empty
+  graph adoption; reembed to int8 writes 8 and `pin_info` reports int8;
+  image graph reembed still refused; an int8 vision open actually calls
+  the image pin (the caller gate, not just the codec, is the
+  regression); router/settings accept `image_precision="int8"`;
+  `pin_info` reports an image precision mismatch; an unknown stored
+  code refuses; a reembed whose encoder cannot name its precision
+  refuses without touching either pin.
 
 ### 3.4 Rows (Silk)
 
 - `MODEL_PRECISIONS["google/embeddinggemma-2"] += ("int8",)` — the ONNX
   Loader's precision row and the KG's Q5 precision check pick it up via
   `precisions_for()` / `landing_precision()` with no UI code.
-- Tooltip: "int8 is a size choice (~0.3 GB text); CPU tok/s about half
-  fp32; never on CUDA."
-- int8 is a CPU lane: refuse `device=cuda` + `precision=int8` in
-  `wiring_problem()` with the fix ("set Device to cpu"), so the KG can
-  never boot a CUDA int8 graph whose throughput nobody measured.
+- Tooltip: "int8 is a size choice (~0.3 GB text vs 1.08 GB; the graph
+  file does not shrink). CPU ~0.6 docs/s; CUDA measured at fp32 speed.
+  Never automatic."
+- **No CUDA refusal.** The earlier "int8 is a CPU lane" rule was a
+  portability assumption, not a measurement: the 2026-11-14 run put the
+  q8 graph on the CUDA EP at 38.6 docs/s against fp32's 38.4 (q4f16
+  56.7), with cuDNN loaded. `wiring_problem()` must not refuse
+  `device=cuda` + `precision=int8`; if a deployment wants the CPU lane,
+  it says so.
 - `IMAGE_PRECISIONS` gains int8 only with §3.5's vision artifact, and
   okf's `image_precision` choices grow with it.
 
 ### 3.5 Vision int8 (only if image search needs the size)
 
-`EMBEDGEMMA2_VISION.int8 = onnx/vision_encoder_quantized.onnx`. The gate
-must include **cross-modal end-to-end** (image → text query retrieval),
+`EMBEDGEMMA2_VISION.int8` is registered on the mirror
+(`onnx/vision_encoder_quantized.onnx` + `_data`). The gate must include
+**cross-modal end-to-end** (image → text query retrieval),
 not just tower parity. Note the existing measured fact that the vision
 tower NaNs under emulated fp16 on CPU — int8 is the only quantized CPU
 path here, so its gate runs natively and must be at least as strict.
@@ -439,14 +540,17 @@ use it for sizing, not for search.
 | fp16 text at 8K tokens vs fp32 | embroider probe | mean cosine ≥ 0.999, no NaN, retrieval delta ≤ 0.5 pt |
 | int8 text parity | embroider gate | worst cosine ≥ 0.995, no non-finite |
 | int8 text retrieval | repo eval set | NDCG@10 / recall@20 delta ≤ 0.5 pt |
-| int8 CPU throughput | probe | recorded; expected ~0.5× fp32 (size, not speed) |
+| int8 throughput | probe | CPU and CUDA recorded; CPU ~0.6 docs/s, CUDA ≈fp32 (38.6 vs 38.4); size, not speed |
 | vision fp16 e2e | existing | already 1.0 CUDA, refused on CPU |
 | vision int8 e2e + cross-modal | gate | text-query→image retrieval delta ≤ 0.5 pt |
 | audio front end parity | golden features | ≤ 1e-4 vs processor |
 | audio e2e cross-modal | probe | text-query→audio Hit@1 sanity, no NaN |
 | pin codec | okf tests | int8/fp16/fp32 cross-refusals, reembed re-pin |
+| int8 image path | okf tests | router/settings accept int8; vision pin writes 8; fp16 reopen refused |
+| unknown precision code | okf tests | graph refuses, never adopts |
+| reembed unnamed precision | okf tests | refuses, leaves no mixed model/precision pin |
 | mixed-precision pair | okf tests | tower change refused; text change refused with media present |
-| 256d rebuild (option) | dummy + real copy | vectors −3×, file −18% on the dummy; retrieval delta ≤ 0.5 pt on the eval set |
+| 256d rebuild (option) | real copy | vectors −3×; file −26% on the long-text run (−18% on the dummy); retrieval delta ≤ 0.5 pt |
 
 ## 7. Sequence
 
@@ -457,7 +561,8 @@ use it for sizing, not for search.
    and is the reference for W1 and W4; a labelled query set is still
    needed before a shipping decision.
 2. **M1 — int8 text.** Artifact + gate, okf codec, Silk row, reembed a
-   copy, eval. Small; gated by M0.
+   copy (fresh DB + re-encode for image graphs), eval. Small; gated by
+   M0.
 3. **M2 — pins for mixed precision (W3).** Fusion identity for media,
    audio pin trio. Must precede any audio UI and any int8 image lane.
 4. **M2b — database size (option).** Measure a real graph with the temp
@@ -476,11 +581,15 @@ use it for sizing, not for search.
   `python/embroider/serve.py` (kind, route), `docs/compat.md`,
   `tests/` (e2e gates).
 - okfgraph: `okfgraph/components/embedding.py` (`_PRECISION_CODE`,
-  `stored_precision`, pins), `okfgraph/ops/admin.py` (reembed,
-  `_image_pin_precision`, `pin_info`), `okfgraph/settings.py` (choices,
-  docstrings), `tests/test_reembed*.py`, `tests/test_images.py`; for the
-  optional `db-size` command, `okfgraph/cli.py` + a small read-only
-  component (the temp reporter is its prototype).
+  `stored_precision`, pins), `okfgraph/router.py` (pin calls, image
+  validation), `okfgraph/ops/admin.py` (reembed ordering,
+  `_image_pin_precision`, `pin_info`), `okfgraph/settings.py` (text and
+  image choices), `okfgraph/components/image_assets.py` (content-hash
+  precision), `okfgraph/components/doctor.py` (pin display),
+  `tests/test_precision.py`, `tests/test_reembed*.py`,
+  `tests/test_vision.py`, `tests/test_settings.py`; for the optional
+  `db-size` command, `okfgraph/cli.py` + a small read-only component
+  (the temp reporter is its prototype).
 - Silk: `functions/okf_graph.py` (`MODEL_PRECISIONS`, `IMAGE_PRECISIONS`),
   `functions/onnx_roles.py` (`precisions_for` path; `landing_precision`
   unchanged), `docs/NODES.md`.
@@ -491,8 +600,9 @@ use it for sizing, not for search.
   ranking does. If the eval set is small, say so in the record.
 - **Audio front end** is the only genuinely uncertain piece; the
   features-in fallback keeps the lane shippable if the port slips.
-- **int8 speed**: measured ~half fp32 on CPU; if the goal is throughput,
-  stop after M0.
+- **int8 speed**: measured ~0.6 docs/s on CPU and ≈fp32 on CUDA
+  (38.6 vs 38.4 docs/s); if the goal is throughput rather than model
+  size, stop after M0.
 - **Space-pin back-compat**: a new key must mean "absent = old
   behaviour", or every existing graph trips on the new check.
 - **Per-component dtype measurements** in the publisher's table are
@@ -502,8 +612,9 @@ use it for sizing, not for search.
   audio should be assumed to behave the same until measured, so never
   offer fp16-on-CPU for the towers.
 - **The dummy is synthetic.** Its mix (images ~25%, text ~10%) is a
-  sizing sandbox, not a prediction for any real graph; the real
-  measurement is the first step of W4.
+  sizing sandbox, not a prediction for any real graph; the 2026-11-14
+  long-text run is the first real measurement, and its 50 queries are a
+  signal, not a gate.
 - **The index/page residual is large at small scale** (~40% of the
   dummy). Do not read the 768 → 256 file delta as a general ratio; in a
   graph with far more chunks per image the vector share is higher, and in
