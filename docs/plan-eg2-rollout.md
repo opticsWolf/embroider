@@ -192,8 +192,10 @@ already covers the fail-closed unknown-code path.
 - Version decision is applied. embroider 0.15.1 and okfgraph 0.15.0 are
   on PyPI and crates.io; okfgraph floors `embroider>=0.15.1,<0.16` and
   its lock resolves 0.15.1, so W3's fusion identity is guaranteed.
-- Weave: decide the `dev` push (it was already ahead of `origin/dev`
-  before this work).
+- Weave: its working branch is `dev_gui` (not `dev`); push it together
+  with Silk's `dev`, since `dev_gui` points at Silk commits. Weave's
+  `knowledge-*` extras floor `okfgraph>=0.15.0` / `embroider>=0.15.1`
+  (raised 2026-11-16).
 - Both release tags are pushed; no further release action is pending.
 
 ### N5 — Audio slot (owner: embroider, then okf/Silk)
