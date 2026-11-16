@@ -3,7 +3,10 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [0.15.1] — 2026-11-16
+
+The EmbeddingGemma 2 int8 release, with the fused vision identity and the
+measured text/image gates.
 
 ### Added
 

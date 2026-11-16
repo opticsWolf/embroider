@@ -75,7 +75,7 @@ A route of another kind answers `501`; a malformed body `400`.
 
 ```json
 {"id": "google/embeddinggemma-2", "object": "model", "kind": "embed",
- "engine": "embroider", "engine_version": "0.15.0", "contract": "0.15",
+ "engine": "embroider", "engine_version": "0.15.1", "contract": "0.15",
  "revision": "<snapshot sha>", "device": "cpu", "precision": "fp32",
  "max_length": 8192, "family": "embeddinggemma-2",
  "dim": 512, "native_dim": 768, "ladder": [128, 256, 512, 768],
