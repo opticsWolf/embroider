@@ -124,6 +124,9 @@ m = JinaV5.open("jinaai/jina-embeddings-v5-text-nano-retrieval", precision="int8
 m = JinaV5.open("google/embeddinggemma-2", precision="int8")
 ```
 
+Text int8 passed the labelled scifact/nfcorpus retrieval gate at 768/512
+(2026-11-16); vision int8's cross-modal gate is still open.
+
 `open(model_id, revision=None, cache_dir=None, truncate_dim=512,
 device="auto", max_length=None, precision=None, cpu_arena=False)` —
 all loaders share this shape (minus `truncate_dim` off-embedding).
@@ -174,8 +177,8 @@ bicubic — anything else is rejected rather than embedded under the wrong
 resolution contract. `auto` precision → fp16 on CUDA / fp32 on CPU;
 explicit fp16-on-CPU is an error in both slots (the Jina graph stalls on
 CPU; the Gemma tower NaNs under emulated fp16 — fail fast either way).
-An explicit `int8` uses the published vision q8 graph; it is never selected
-by `auto`.
+An explicit `int8` uses the self-hosted vision q8 graph; it is never
+selected by `auto`. Its cross-modal gate is still open.
 
 ```python
 from embroider import JinaV5Vision, vision_target_size

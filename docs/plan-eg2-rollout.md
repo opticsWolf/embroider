@@ -96,7 +96,9 @@ involved.
 | okf `pin_info` | text + image pins; `image_mismatch`; external host precision | `4eaf1e2` |
 | reembed | validates precision before rewriting; writes a named pin; clears an unnamed pin; reads the landed precision after open | `4eaf1e2` |
 | Silk/Weave | EG2 text and vision offer int8; loader rows and Q5 pick them up | `d455bc2` / `b38784a` |
-| Tests | okf full suite 1339 passed / 7 skipped; Silk 1505 passed / 3 skipped / 1 deselected | 2026-11-15 |
+| Text retrieval gate | int8 vs fp32 at 768/512, scifact + nfcorpus: NDCG@10 delta ≤ 0.16 pt | `OKFgraph/docs/eg2-int8-gates.md`, 2026-11-16 |
+| Downgrade check | okfgraph 0.14.2 refused the int8 graph through the space pin | `OKFgraph/docs/compat.md`, 2026-11-16 |
+| Tests | okf full suite 1339 passed / 7 skipped; Silk 1505 passed / 3 skipped / 1 deselected; S7 ONNX-host file 11 passed | 2026-11-15 / 2026-11-16 |
 
 Live text proof: `pin_info` reports `int8`, `space` is
 `…@52614d7…:int8:768:8192:text_embed:v1`, `reembed` keeps int8, and an
@@ -108,15 +110,13 @@ fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 
 | # | Item | Why it matters | Blocking? |
 |---|---|---|---|
-| 1 | **Labelled retrieval eval** for int8 text — **passed 2026-11-16** | 50-query run is a signal, not the policy bar (NDCG@10 / recall@20 delta ≤ 0.5 pt) | no (gate passed) |
-| 2 | **Vision int8 live + cross-modal gate** | vision q8 is registered but no image has been encoded; image→text retrieval is unmeasured | yes, for image int8 |
-| 3 | **Mixed-pair product rule** | code allows text int8 + vision fp16; plan default is text int8 + vision int8 (or no image lane) | yes, for image int8 |
-| 4 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
-| 5 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
-| 6 | **Downgrade/back-compat test** — **passed 2026-11-16** | older okfgraph (0.14.2 codec) does not decode 8; the space pin should catch it | no (space pin refused) |
-| 7 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display only reads text precision; no image precision preflight | no, polish |
-| 8 | **Release/rollout** | commits are local, no version bump/changelog/tag; Weave is far ahead of its remote | operational |
-| 9 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
+| 1 | **Vision int8 live + cross-modal gate** | vision q8 is registered but no image has been encoded; image→text retrieval is unmeasured | yes, for image int8 |
+| 2 | **Mixed-pair product rule** | code allows text int8 + vision fp16; plan default is text int8 + vision int8 (or no image lane) | yes, for image int8 |
+| 3 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
+| 4 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
+| 5 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display only reads text precision; no image precision preflight | no, polish |
+| 6 | **Release/rollout** | commits are local, no version bump/changelog/tag; Weave is far ahead of its remote | operational |
+| 7 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
 
 ---
 
@@ -175,7 +175,14 @@ already covers the fail-closed unknown-code path.
 ### N4 — Release (owner: all)
 
 - Changelog entries: embroider (artifact/mirror), okfgraph (pin codec,
-  image lane, reembed), Silk (rows).
+  image lane, reembed), Silk (rows). Both changelogs have an
+  `[Unreleased]` section.
+- Docs ready: `OKFgraph/docs/eg2-int8-gates.md` (N1 + N3),
+  `OKFgraph/docs/compat.md`, `OKFgraph/docs/bench-eg2-precision-width.md`,
+  embroider `README` / `docs/quickref.md` / `docs/compat.md`, Silk
+  `docs/NODES.md` and `docs/ONNX_UNIFICATION_PLAN.md`. The release note
+  must keep saying text int8 is explicit and measured, vision int8's
+  cross-modal gate is open, and int8 does not shrink the database.
 - Version decision and tag; push the local commits.
 - Weave: decide the `dev` push (it was already ahead of `origin/dev`
   before this work).
@@ -203,8 +210,8 @@ quantization is a separate engine project, only after measurement.
 - Surface `image_mismatch` in the KG pin display.
 - Add an image-precision preflight (server refuses at first image encode
   today).
-- Keep the warm-pool node UI and reranker `max_tokens` wording on the
-  earlier S7/S8 list; unrelated to int8.
+- Keep the warm-pool node UI on the earlier S4 list; the reranker
+  `max_tokens` wording (S8) is verified and unrelated to int8.
 
 ### N8 — Cleanup
 

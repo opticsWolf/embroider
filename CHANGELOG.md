@@ -3,6 +3,27 @@
 All notable changes to `embroider` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com).
 
+## [Unreleased]
+
+### Added
+
+- **EmbeddingGemma 2 text and vision int8 artifacts.** The registry
+  serves the dynamic-int8 text graph and its vision twin from
+  `opticsWolf/embeddinggemma-2-onnx-int8` (`52614d7`), with pinned
+  revisions and sidecars. An explicit `precision="int8"` opens and
+  encodes at 768d; `auto` never resolves to int8. The audio q8 graph is
+  mirrored but has no slot or route yet.
+- **Live int8 identity.** `describe()` reports the landed `int8`
+  precision and the full space, so okfgraph can pin it like any other
+  tier. The text tier passed the labelled scifact/nfcorpus retrieval gate
+  at 768/512 (2026-11-16); the vision cross-modal gate is still open.
+
+### Docs
+
+- `docs/compat.md` records the mirror and the measured status;
+  `docs/quickref.md` names the self-hosted vision q8 graph and its open
+  gate; `docs/plan-eg2-rollout.md` is the execution reference.
+
 ## [0.15.0] — 2026-11-11
 
 One way to load, serve and identify a model, for every consumer

@@ -167,8 +167,8 @@ These are model footprint, not database size.
 ## Caveats
 
 - 50 queries, one target each: a 2-point difference is one query. Treat
-  the quality ordering as a signal, and re-run on a labelled set before
-  shipping a decision.
+  the quality ordering as a signal; the labelled scifact/nfcorpus gate
+  passed on 2026-11-16 (`OKFgraph/docs/eg2-int8-gates.md`).
 - Curated queries are relatively easy (baseline R@1 .88 at 768), so the
   floor is high and precision differences compress.
 - Exact cosine, not HNSW: the DBs have indexes and were spot-checked,

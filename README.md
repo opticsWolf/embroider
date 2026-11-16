@@ -41,7 +41,9 @@ move between in-process and hosted without re-embedding.
 | Vision → text space (Jina, Gemma) | `JinaV5Vision`, `GemmaVision` / `vision`, `gemma` | `jina-v5-omni-nano-retrieval-vision`, `google/embeddinggemma-2-vision` | fp32, fp16; int8 on gemma-2 vision |
 `int8` is explicit-only (never `auto`) and falls back to fp32 when a
 model has no measured artifact. The gemma-2 q8 text/vision/audio graphs
-serve from `opticsWolf/embeddinggemma-2-onnx-int8`.
+serve from `opticsWolf/embeddinggemma-2-onnx-int8`. The text tier passed
+the labelled scifact/nfcorpus retrieval gate at 768/512 (2026-11-16);
+the vision tier's cross-modal gate is still open.
 
 | Cross-encoder rerank | `Reranker` / `rerank` | `cross-encoder/ms-marco-MiniLM-L-6-v2`, `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | fp32, q8 |
 | Typed decisions (GLiClass) | `Decider` / `decide` | `knowledgator/gliclass-small-v1.0`, `knowledgator/gliclass-v4-edge` | fp32 (v4-edge also q8) |

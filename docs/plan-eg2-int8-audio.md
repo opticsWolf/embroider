@@ -57,9 +57,10 @@ tower, then the text session with `image_features`, `video_features` and
 
 ### Decisions this plan makes
 
-1. **The artifact is registered; the pin codec is still the gate.** The
-   graphs are on the self-hosted mirror; the codec is what keeps them
-   honest.
+1. **The artifact is registered; the pin and retrieval gates are the
+   guards.** The graphs are on the self-hosted mirror; the codec keeps
+   them honest, and the labelled text gate passed 2026-11-16. Vision
+   int8 has its own cross-modal gate.
 2. **Mixed precision is legal per lane.** The unit of a vector space is
    the `(text fusion, tower)` pair; media pins must name the fusion
    identity, not only the tower.
@@ -594,7 +595,7 @@ questions is `docs/plan-eg2-rollout.md` §4.
 - **The dummy is synthetic.** Its mix (images ~25%, text ~10%) is a
   sizing sandbox, not a prediction for any real graph; the 2026-11-14
   long-text run is the first real measurement, and its 50 queries are a
-  signal, not a gate.
+  signal. The labelled retrieval gate passed 2026-11-16.
 - **The index/page residual is large at small scale** (~40% of the
   dummy). Do not read the 768 → 256 file delta as a general ratio; in a
   graph with far more chunks per image the vector share is higher, and in
