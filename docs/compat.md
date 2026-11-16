@@ -1,9 +1,10 @@
 # Compatibility matrix
 
-One pinned stack in practice. A new `embroider` minor without an okfgraph
-update is a **supported** state (the floor pin allows it); the vendored
-golden vectors (`fixtures/golden_jina_v5_text_small.json`) are the contract
-proof — okfgraph's suite asserts live vectors against them.
+One pinned stack in practice. A newer `embroider` patch within the pinned
+minor is a **supported** state without an okfgraph update; a new minor
+requires a matching okfgraph release. The vendored golden vectors
+(`fixtures/golden_jina_v5_text_small.json`) are the contract proof —
+okfgraph's suite asserts live vectors against them.
 
 | okfgraph | bobine | embroider | onnxruntime (pip) | embroider wheels |
 |---|---|---|---|---|
@@ -12,6 +13,7 @@ proof — okfgraph's suite asserts live vectors against them.
 | 0.11.x | 0.7.x+ | 0.12.x | 1.29.0 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.12.x | 0.8.1+ | 0.14.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.13.x | 0.8.1+ | 0.15.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
+| 0.14.x | 0.9.x+ | 0.15.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
 | 0.15.x | 0.9.x+ | 0.15.x | 1.31.1 | py3.11–3.13 × linux / win / macOS-arm64 |
 
 bobine 0.8.1 is the first release whose `[cpu]` / `[gpu]` extras pin ORT
@@ -30,13 +32,14 @@ Rules:
   consumer (`ORT_DYLIB_PATH`-overridable). Never float it per project.
 - **Floor pin**: okfgraph 0.7.x requires `embroider>=0.2,<0.3`, 0.8.x
   requires `embroider>=0.3,<0.4`, 0.11.x `>=0.12,<0.13`, 0.12.x
-  `>=0.14,<0.15`, 0.13.x and 0.15.x `>=0.15,<0.16` — the Jina contract moves only with
-  okfgraph releases (0.3.0 adds the vision contract; the text contract
-  is untouched, same goldens).
+  `>=0.14,<0.15`, and 0.13.x–0.15.x `>=0.15,<0.16` — the contract moves
+  only with okfgraph releases (0.3.0 adds the vision contract; the text
+  contract is untouched, same goldens).
 - **No torch anywhere in the chain**: text embeddings (embroider/Jina) and
   bobine vision models are all ONNX Runtime; okfgraph image embeddings are
   caption text vectors (`mode=text`) or ONNX vision vectors (`optional`/`omni`
-  via `JinaV5Vision`) since okfgraph 0.8.0.
+  via `JinaV5Vision` / `GemmaVision`) since okfgraph 0.8.0 (Gemma slot
+  since 0.14).
 - **Frozen vector space**: prefixes, last-token pooling, truncation order
   never change inside a minor. A contract change is a new minor plus a
   re-index-everything notice, and the golden fixture is regenerated.

@@ -116,7 +116,7 @@ fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 | 1 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
 | 2 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
 | 3 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display still needs the fusion/precision row, and the server refuses at first image encode | no, polish |
-| 4 | **Release/rollout** | commits are local, no version bump/changelog/tag; Weave is far ahead of its remote | operational |
+| 4 | **Release/rollout** | version bump + changelog are on `main` (embroider 0.15.1 / okfgraph 0.15.0) and branches are pushed; tags/publish are pending explicit go; Weave is far ahead of its remote | operational |
 | 5 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
 
 ---
@@ -181,15 +181,17 @@ already covers the fail-closed unknown-code path.
 ### N4 — Release (owner: all)
 
 - Changelog entries: embroider (artifact/mirror), okfgraph (pin codec,
-  image lane, reembed), Silk (rows). Both changelogs have an
-  `[Unreleased]` section.
+  image lane, reembed), Silk (rows). Both release changelogs are dated
+  and the versions are on `main` (embroider 0.15.1 / okfgraph 0.15.0).
 - Docs ready: `OKFgraph/docs/eg2-int8-gates.md` (N1 + N2 + N3),
   `OKFgraph/docs/compat.md`, `OKFgraph/docs/bench-eg2-precision-width.md`,
   embroider `README` / `docs/quickref.md` / `docs/compat.md`, Silk
   `docs/NODES.md` and `docs/ONNX_UNIFICATION_PLAN.md`. The release note
   must keep saying text int8 is explicit and measured, vision int8's
   cross-modal gate passed, and int8 does not shrink the database.
-- Version decision and tag; push the local commits.
+- Version decision is applied; the branches are pushed. The hard floors
+  stay `>=0.15,<0.16` until 0.15.1 is on PyPI; W3 documents the 0.15.1
+  image-fusion requirement.
 - Weave: decide the `dev` push (it was already ahead of `origin/dev`
   before this work).
 - Do **not** tag/publish without an explicit go.
@@ -243,7 +245,7 @@ quantization is a separate engine project, only after measurement.
 | audio front end / e2e | **open** | W2 not started |
 | DB width (256d) | **option** | 26% smaller file; fresh DB needed |
 | downgrade from 0.14.2 | **pass 2026-11-16** | space pin refused the int8 graph (`compat.md`) |
-| release/push | **open** | local commits, no tag |
+| release/push | **prep done** | `main` 0.15.1 / okf 0.15.0, branches pushed, no tag |
 
 ---
 
