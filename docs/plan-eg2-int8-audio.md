@@ -97,10 +97,11 @@ tower, then the text session with `image_features`, `video_features` and
 - **Live proof**: a temp graph on CPU reports `precision=int8`, `space`
   `…@52614d7…:int8:768:8192:text_embed:v1`, reembed keeps int8, and an
   fp32 reopen raises `PRECISION_PIN_MISMATCH`.
-- **Still open**: the labelled retrieval gate (the 50-query run is a
-  signal), the vision cross-modal gate, the mixed-pair product rule, and
-  the audio slot. The image lane has no okf/Silk consumer yet beyond the
-  pin. See `plan-eg2-rollout.md` §3–§4.
+- **Still open**: the vision cross-modal gate, the mixed-pair product
+  rule, and the audio slot. The labelled text-retrieval gate passed on
+  2026-11-16 (scifact + nfcorpus, 768/512; `OKFgraph/docs/eg2-int8-gates.md`).
+  The image lane has no okf/Silk consumer yet beyond the pin. See
+  `plan-eg2-rollout.md` §3–§4.
 
 ## 1. Non-goals
 
@@ -275,8 +276,8 @@ articles (5.2 M chars) q8 measured mean 1−cos 8.5e-4 (p99 2.9e-2)
 against fp32, and on 50 curated queries it matched fp32's retrieval at
 768/512 (R@1 .88, NDCG .956) and stayed within ±2 points at 256/128.
 The model footprint is 314 MB vs 1.08 GB; the graph file is unchanged
-(same `FLOAT[dim]`). This supports the gate but does not replace it:
-50 queries is a signal; the labelled eval set is the decision.
+(same `FLOAT[dim]`). It supported the gate but did not replace it; the
+labelled eval set was the decision, and it passed on 2026-11-16.
 
 ### 3.3 Pin codec (okfgraph) — landed (`4eaf1e2`)
 
@@ -529,11 +530,11 @@ use it for sizing, not for search.
    still open. The int8/q4/q4f16 real-text matrix was taken on 2026-11-14
    (1,500 long articles, 50 queries, 20 DBs;
    `docs/eg2-int8-audio-results.md`) and is the reference for W1/W4; the
-   labelled query set is still the shipping gate.
+   labelled query set passed the shipping gate on 2026-11-16.
 2. **M1 — int8 text.** Artifact, okf codec, Silk row and the text-only
-   reembed path are **landed** (`95ff50c`, `4eaf1e2`, `d455bc2`). The
-   labelled retrieval eval and the reembed-a-copy check remain open; image
-   graphs need a fresh DB + re-encode.
+   reembed path are **landed** (`95ff50c`, `4eaf1e2`, `d455bc2`); the
+   labelled retrieval gate passed 2026-11-16. The reembed-a-copy check
+   remains open; image graphs need a fresh DB + re-encode.
 3. **M2 — pins for mixed precision (W3).** Fusion identity for media and
    the audio pin trio are **not yet implemented**; they must precede any
    audio UI and the int8 image lane. The mixed-pair default is still a
@@ -574,9 +575,9 @@ questions is `docs/plan-eg2-rollout.md` §4.
 
 - **int8 retrieval drift** is the real gate; cosine will pass long before
   ranking does. If the eval set is small, say so in the record.
-- **Downgrade back-compat**: older okfgraph (codec 16/32) does not decode
-  8; the space pin should refuse it, but that path is untested. Do not
-  serve int8 graphs to older clients until it is.
+- **Downgrade back-compat**: tested 2026-11-16 on okfgraph 0.14.2; the
+  space pin refused the new int8 graph (`OKFgraph/docs/compat.md`). Do not
+  serve int8 graphs to clients that predate the space pin.
 - **Audio front end** is the only genuinely uncertain piece; the
   features-in fallback keeps the lane shippable if the port slips.
 - **int8 speed**: measured ~0.6 docs/s on CPU and ≈fp32 on CUDA

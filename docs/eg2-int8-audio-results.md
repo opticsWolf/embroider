@@ -13,8 +13,10 @@ now registered on the self-hosted mirror (`95ff50c`), and okf's pin codec,
 image paths, reembed and `pin_info` handle int8 (`4eaf1e2`). The
 benchmark below loaded the ONNX files directly with `onnxruntime`, so it
 measured the tier, not the registry path; a live `open(..., precision="int8")`
-now reports `int8` and encodes. The labelled retrieval gate and the vision
-cross-modal gate are still open.
+now reports `int8` and encodes. The labelled text-retrieval gate passed
+on 2026-11-16 (scifact + nfcorpus, 768/512;
+`OKFgraph/docs/eg2-int8-gates.md`); the vision cross-modal gate is still
+open.
 
 ## Setup
 

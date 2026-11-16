@@ -1,6 +1,7 @@
 # EmbeddingGemma 2 — target architecture, rollout plan, and next steps
 
-Status: **2026-11-15**, after the int8 text/vision landing. This is the
+Status: **2026-11-16**, after the int8 text/vision landing and the N1/N3
+gates. This is the
 consolidated execution plan; the detailed research and workstreams stay in
 `plan-eg2-int8-audio.md`, and the measurements stay in
 `eg2-int8-audio-results.md` (embroider) and
@@ -107,12 +108,12 @@ fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 
 | # | Item | Why it matters | Blocking? |
 |---|---|---|---|
-| 1 | **Labelled retrieval eval** for int8 text | 50-query run is a signal, not the policy bar (NDCG@10 / recall@20 delta ≤ 0.5 pt) | yes, for shipping |
+| 1 | **Labelled retrieval eval** for int8 text — **passed 2026-11-16** | 50-query run is a signal, not the policy bar (NDCG@10 / recall@20 delta ≤ 0.5 pt) | no (gate passed) |
 | 2 | **Vision int8 live + cross-modal gate** | vision q8 is registered but no image has been encoded; image→text retrieval is unmeasured | yes, for image int8 |
 | 3 | **Mixed-pair product rule** | code allows text int8 + vision fp16; plan default is text int8 + vision int8 (or no image lane) | yes, for image int8 |
 | 4 | **Audio slot (W2)** | audio q8 is mirrored but has no `ModelSpec`, route, front end or consumer | no, separate feature |
 | 5 | **Database size** | `okf db-size` is a prototype; 256d fresh-import and int8 storage are options, not scheduled | no, optional |
-| 6 | **Downgrade/back-compat test** | older okfgraph (0.14.2 codec) does not decode 8; the space pin should catch it | yes, before serving mixed versions |
+| 6 | **Downgrade/back-compat test** — **passed 2026-11-16** | older okfgraph (0.14.2 codec) does not decode 8; the space pin should catch it | no (space pin refused) |
 | 7 | **Silk UI / preflight** | `image_mismatch` is server-side; the KG pin display only reads text precision; no image precision preflight | no, polish |
 | 8 | **Release/rollout** | commits are local, no version bump/changelog/tag; Weave is far ahead of its remote | operational |
 | 9 | **Known flaky test** | `test_only_one_agent_wins_a_contested_claim` hangs in the 8-thread race (pre-existing) | no, deselected |
@@ -121,7 +122,7 @@ fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 
 ## 4. Next steps, in order
 
-### N1 — Retrieval gate (owner: embroider + okfgraph)
+### N1 — Retrieval gate (owner: embroider + okfgraph) — **done 2026-11-16**
 
 Build or adopt a labelled retrieval set (the cached BeIR suites are a
 candidate; a hand-reviewed in-domain set is better). Run fp32 vs int8 at
@@ -134,6 +135,13 @@ small, say so in the record.
 
 Files: `scripts/eval_search.py`-style harness in okfgraph, or the temp
 bench's `eval_matrix.py` lifted into a tracked script. No engine change.
+
+**Result (2026-11-16):** pass on BEIR scifact (300 queries) and
+nfcorpus (323 queries) at 768 and 512. NDCG@10 deltas are +0.16/−0.13
+and +0.12/−0.03 pt; the NDCG@10 and recall@20 deltas are inside the
+0.5 pt bar (the largest R@1 move is +0.62 pt).
+Harness: `OKFgraph/scripts/eval_precision.py`; record:
+`OKFgraph/docs/eg2-int8-gates.md`.
 
 ### N2 — Vision int8 end-to-end (owner: embroider + Silk)
 
@@ -151,13 +159,18 @@ Files: `src/vision.rs` / `src/gemma.rs`, `okfgraph/components/embedding.py`,
 `okfgraph/router.py`, `weave/plugins/silk/functions/okf_wiring.py`,
 `nodes/knowledge_graph.py`, tests.
 
-### N3 — Downgrade / mixed-version check (owner: okfgraph)
+### N3 — Downgrade / mixed-version check (owner: okfgraph) — **done 2026-11-16**
 
 Open a new int8-pinned graph with the previous okfgraph release
 (0.14.2). Confirm the space pin refuses a fp16/fp32 session. If it does
 not, either require a space pin for int8 graphs or add a version/schema
 floor; record the result in `docs/compat.md`. Add a regression test that
 reads a hand-written code 8 with the old decoder path if feasible.
+
+**Result (2026-11-16):** okfgraph 0.14.2 landed fp32 and the space pin
+refused the int8 graph (`StateError`, pinned int8 / landed fp32); no
+floor was needed. Record: `OKFgraph/docs/compat.md`. The current suite
+already covers the fail-closed unknown-code path.
 
 ### N4 — Release (owner: all)
 
@@ -208,14 +221,14 @@ quantization is a separate engine project, only after measurement.
 |---|---|---|
 | int8 artifact registered, explicit-only | **done** | `95ff50c`, mirror `52614d7` |
 | text parity | **done** | mean 1−cos 8.5e-4, p99 2.9e-2 |
-| text retrieval (labelled) | **open** | 50 queries: equal at 768/512, ±2 at 256/128 |
+| text retrieval (labelled) | **pass 2026-11-16** | scifact + nfcorpus, 768/512; NDCG delta ≤ 0.16 pt (`eg2-int8-gates.md`) |
 | text pin cross-refusals | **done** | `4eaf1e2` + tests |
 | image pin paths | **done** | router/settings/caller/decode/hash/pin_info |
 | vision int8 e2e / cross-modal | **open** | no live image encode yet |
 | mixed-pair rule | **open** | code allows; product default undecided |
 | audio front end / e2e | **open** | W2 not started |
 | DB width (256d) | **option** | 26% smaller file; fresh DB needed |
-| downgrade from 0.14.2 | **open** | space pin expected to catch; untested |
+| downgrade from 0.14.2 | **pass 2026-11-16** | space pin refused the int8 graph (`compat.md`) |
 | release/push | **open** | local commits, no tag |
 
 ---
@@ -292,12 +305,14 @@ print(m.encode("which planet is closest to the Sun", task="query").shape)
 
 ## 9. Open questions to settle before shipping
 
-1. Which labelled set is the retrieval gate, and what is the acceptable
-   delta on it?
+1. ~~Which labelled set is the retrieval gate, and what is the acceptable
+   delta on it?~~ Closed: scifact + nfcorpus, NDCG@10/recall@20 ≤ 0.5 pt,
+   both passed 2026-11-16.
 2. Is text int8 + vision fp16 allowed, or is the product rule “both int8
    or no image lane”?
-3. Does the previous okfgraph release refuse a new int8 graph via the
-   space pin, or does it need a version floor?
+3. ~~Does the previous okfgraph release refuse a new int8 graph via the
+   space pin, or does it need a version floor?~~ Closed: 0.14.2 refuses
+   through the space pin; no floor needed.
 4. Is `okf db-size` worth productizing now, or only when a real graph
    hits a size problem?
 5. Is the audio slot waiting for a consumer, or is there a concrete
