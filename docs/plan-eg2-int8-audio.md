@@ -1,8 +1,10 @@
 # Plan — EmbeddingGemma 2: int8, the audio slot, and mixed precision
 
-Status: plan, 2026-11-14. Owner repos: **embroider** (artifacts, lanes,
-sessions, host), **okfgraph** (pins, re-embed, image lane), **Silk** (rows
-only). bobine is not involved.
+Status: plan, 2026-11-14; implementation status 2026-11-15. Owner repos:
+**embroider** (artifacts, lanes, sessions, host), **okfgraph** (pins,
+re-embed, image lane), **Silk** (rows only). bobine is not involved.
+Execution plan, target architecture and next steps:
+`docs/plan-eg2-rollout.md`.
 
 ## 0. What EG2 is, in the terms this stack uses
 
@@ -84,16 +86,21 @@ tower, then the text session with `image_features`, `video_features` and
   mirror (`opticsWolf/embeddinggemma-2-onnx-int8` @ `52614d7`); `auto`
   still never selects it. A live `open(..., precision="int8")` reports
   `int8` and encodes.
-- **okf pin codec**: landed — `int8: 8` in the codec, both decoders and
-  enforcers, unknown codes fail closed, the image caller/settings/hash
-  paths accept int8, `pin_info` compares image pins, and reembed
-  validates the precision before writing (clearing an unnamed pin
-  instead of leaving a lie). Tests cover the cross-refusals.
-- **Silk rows**: landed — EG2 text and vision offer `int8`; the ONNX
-  Loader and KG Q5 checks pick it up through the existing helpers.
+- **okf pin codec**: landed in `4eaf1e2` — `int8: 8` in the codec, both
+  decoders and enforcers, unknown codes fail closed, the image
+  caller/settings/hash paths accept int8, `pin_info` compares image pins,
+  and reembed validates the precision before writing (clearing an unnamed
+  pin instead of leaving a lie). Tests cover the cross-refusals.
+- **Silk rows**: landed in `d455bc2` / `b38784a` — EG2 text and vision
+  offer `int8`; the ONNX Loader and KG Q5 checks pick it up through the
+  existing helpers.
+- **Live proof**: a temp graph on CPU reports `precision=int8`, `space`
+  `…@52614d7…:int8:768:8192:text_embed:v1`, reembed keeps int8, and an
+  fp32 reopen raises `PRECISION_PIN_MISMATCH`.
 - **Still open**: the labelled retrieval gate (the 50-query run is a
-  signal), the vision cross-modal gate, and the audio slot. The image
-  lane has no okf/Silk consumer yet beyond the pin.
+  signal), the vision cross-modal gate, the mixed-pair product rule, and
+  the audio slot. The image lane has no okf/Silk consumer yet beyond the
+  pin. See `plan-eg2-rollout.md` §3–§4.
 
 ## 1. Non-goals
 
@@ -271,20 +278,24 @@ The model footprint is 314 MB vs 1.08 GB; the graph file is unchanged
 (same `FLOAT[dim]`). This supports the gate but does not replace it:
 50 queries is a signal; the labelled eval set is the decision.
 
-### 3.3 Pin codec (okfgraph) — the real blocker
+### 3.3 Pin codec (okfgraph) — landed (`4eaf1e2`)
 
-- `_PRECISION_CODE = {"int8": 8, "fp16": 16, "fp32": 32}`
-  (`okfgraph/components/embedding.py:141`); `stored_precision` (`:149`),
-  the two pin enforcers (`:160`, `:456`) and `_image_pin_precision`
-  (`okfgraph/ops/admin.py:792`) decode 8.
-- `_enforce_pins` (`okfgraph/router.py:539-548`) then enforces int8 like
-  any other precision (it skips values not in the codec — exactly the
-  current hole).
-- `reembed`'s re-pin branch (`okfgraph/ops/admin.py:638-643`) is keyed
-  off the codec; it starts writing 8 automatically. Until then it leaves
-  the old fp16/fp32 pin in place — a pin that then lies about the
-  vectors. Its ImageAsset refusal (`okfgraph/ops/admin.py:511-519`)
-  stays.
+- `_PRECISION_CODE = {"int8": 8, "fp16": 16, "fp32": 32}` in
+  `components/embedding.py`; `stored_precision`, both enforcers,
+  `pin_info` and `doctor` decode 8.
+- `_enforce_pins` enforces int8 like any other precision. Unknown stored
+  codes are now **fail-closed** in both enforcers instead of being
+  treated as unpinned.
+- `reembed` validates the engine's precision **before** rewriting
+  vectors, writes a named pin, clears an unnamed one (no lying pin), and
+  re-reads the landed precision after the encoder opens. The
+  `ImageAsset` refusal stays.
+- Image paths learned int8 end to end: `router` and `settings` accept
+  `image_precision="int8"`; the vision pin caller and stored decode use
+  the codec; `image_assets` content-hash and `doctor` decode int8.
+- `pin_info` compares image model/precision/space, reports
+  `image_mismatch` (and prefixed entries in `mismatch`), and uses an
+  external host's `identity.precision`.
 - **The model pin cannot cover this.** int8 is the same
   `google/embeddinggemma-2` id; `enforce_model_pin` compares ids, so an
   int8 graph looks model-identical to fp16. The precision pin is the only
@@ -295,56 +306,16 @@ The model footprint is 314 MB vs 1.08 GB; the graph file is unchanged
   int8 + vision int8 (or no image lane); mixed vision precision is
   mechanically legal only with the fusion identity pinned (§2.4), and
   the quality gate decides.
-- **The image lane's caller also filters the precision.** Extending
-  `_PRECISION_CODE` is not enough there: `router.py:729` calls
-  `enforce_image_precision_pin` only when
-  `precision in ("fp16", "fp32")`, and `_stored_image_precision`
-  (`router.py:710`) maps only 16/32. Both must learn int8 (or use the
-  codec), or an int8 vision session writes no pin while the text lane
-  does.
-- **Image int8 has four more unreachable paths.** `router.py:434`
-  refuses `image_precision="int8"` before any session opens;
-  `settings.py:209` offers only auto/fp32/fp16; `image_assets.py:332`
-  collapses a landed int8 into the fp16/fp32 content-hash bucket; and
-  `doctor.py:301` decodes only 16/32. All four must learn int8, or the
-  lane is either refused up front or misreported.
-- **`pin_info` does not compare image pins.** `admin.py:875-883`
-  reports `image.pinned_model`/`pinned_precision`/`pinned_space` but has
-  no `configured_precision`, no image space comparison and adds nothing
-  to `mismatch`. Add image model/precision/space entries and an
-  `image_mismatch` list (or prefixed names), or Silk cannot display the
-  mismatch it is about to refuse.
-- **Unknown codes must fail closed.** Both enforcers treat an
-  undecodable stored value as "no pin" and return the requested
-  precision without writing (`embedding.py:181-183`, `:468-470`). Once
-  8 decodes this is moot for int8, but keep it fail-closed for the next
-  code: raise `PRECISION_PIN_MISMATCH`/`IMAGE_PIN_MISMATCH`, never
-  accept.
-- **Reembed must validate before it writes.** `admin.py:631-643`
-  writes the model pin first, then writes precision only if the codec
-  knows it; a precision outside the codec leaves a new model next to an
-  old precision. Compute and validate the precision first; refuse (or
-  clear both pins) when it cannot be named.
-- **External hosts:** `pin_info` leaves `configured_precision` at
-  `None` when `backend == "external"` (`admin.py:825-831`), so a host
-  that names int8 but opens fp16 shows no precision mismatch. The host
-  contract already reports `identity.precision` (`external_embedder.py`)
-  — use it in the report.
 - **Database size:** int8 vectors keep `FLOAT[dim]`; the graph file does
   not shrink. 314 MB is model footprint, not DB.
-- `pin_info()` docstring/reading shape gains int8.
-- `okfgraph/settings.py`: `precision` already accepts int8 ("explicit
-  only, needs a measured artifact") — now the artifact exists.
-- Tests: int8 graph refuses an fp16/fp32 reopen and vice versa; empty
-  graph adoption; reembed to int8 writes 8 and `pin_info` reports int8;
-  image graph reembed still refused; an int8 vision open actually calls
-  the image pin (the caller gate, not just the codec, is the
-  regression); router/settings accept `image_precision="int8"`;
-  `pin_info` reports an image precision mismatch; an unknown stored
-  code refuses; a reembed whose encoder cannot name its precision
-  refuses without touching either pin.
+- Tests: int8 set/match and int8↔fp16/fp32 refusals; empty-graph
+  adoption; reembed writes 8 and `pin_info` reports it; image graph
+  reembed still refused; the int8 vision caller actually pins; router
+  and settings accept image int8; `pin_info` reports an image mismatch;
+  an unknown stored code refuses; a reembed whose encoder cannot name
+  its precision refuses without touching either pin.
 
-### 3.4 Rows (Silk)
+### 3.4 Rows (Silk) — landed (`d455bc2`)
 
 - `MODEL_PRECISIONS["google/embeddinggemma-2"] += ("int8",)` — the ONNX
   Loader's precision row and the KG's Q5 precision check pick it up via
@@ -358,8 +329,8 @@ The model footprint is 314 MB vs 1.08 GB; the graph file is unchanged
   56.7), with cuDNN loaded. `wiring_problem()` must not refuse
   `device=cuda` + `precision=int8`; if a deployment wants the CPU lane,
   it says so.
-- `IMAGE_PRECISIONS` gains int8 only with §3.5's vision artifact, and
-  okf's `image_precision` choices grow with it.
+- `IMAGE_PRECISIONS` includes int8; the vision q8 artifact exists and
+  okf's `image_precision` accepts it.
 
 ### 3.5 Vision int8 (only if image search needs the size)
 
@@ -552,26 +523,31 @@ use it for sizing, not for search.
 | mixed-precision pair | okf tests | tower change refused; text change refused with media present |
 | 256d rebuild (option) | real copy | vectors −3×; file −26% on the long-text run (−18% on the dummy); retrieval delta ≤ 0.5 pt |
 
-## 7. Sequence
+## 7. Sequence and current status
 
-1. **M0 — probes (1–2 days).** Long-context fp16 parity; audio
-   artifact smoke (open, encode one clip, read `audio_features` shape and
-   framing). The int8/q4/q4f16 real-text matrix was taken on 2026-11-14
-   (1,500 long articles, 50 queries, 20 DBs; `docs/eg2-int8-audio-results.md`)
-   and is the reference for W1 and W4; a labelled query set is still
-   needed before a shipping decision.
-2. **M1 — int8 text.** Artifact + gate, okf codec, Silk row, reembed a
-   copy (fresh DB + re-encode for image graphs), eval. Small; gated by
-   M0.
-3. **M2 — pins for mixed precision (W3).** Fusion identity for media,
-   audio pin trio. Must precede any audio UI and any int8 image lane.
+1. **M0 — probes.** Long-context fp16 parity and audio artifact smoke are
+   still open. The int8/q4/q4f16 real-text matrix was taken on 2026-11-14
+   (1,500 long articles, 50 queries, 20 DBs;
+   `docs/eg2-int8-audio-results.md`) and is the reference for W1/W4; the
+   labelled query set is still the shipping gate.
+2. **M1 — int8 text.** Artifact, okf codec, Silk row and the text-only
+   reembed path are **landed** (`95ff50c`, `4eaf1e2`, `d455bc2`). The
+   labelled retrieval eval and the reembed-a-copy check remain open; image
+   graphs need a fresh DB + re-encode.
+3. **M2 — pins for mixed precision (W3).** Fusion identity for media and
+   the audio pin trio are **not yet implemented**; they must precede any
+   audio UI and the int8 image lane. The mixed-pair default is still a
+   product decision.
 4. **M2b — database size (option).** Measure a real graph with the temp
-   reporter; if vectors dominate and the quality budget allows it, plan a
-   fresh 256d import. No engine work, no image-policy change.
+   reporter; if vectors dominate and quality allows, plan a fresh 256d
+   import. No engine work, no image-policy change.
 5. **M3 — audio slot (embroider).** Encoder + front end + fusion + host
-   route. The largest piece; independent of M1.
+   route. **Not started**; independent of M1.
 6. **M4 — consumers.** okf audio asset/search, Silk nodes. Only after a
    real use case.
+
+The ordered execution list with owners, acceptance gates and open
+questions is `docs/plan-eg2-rollout.md` §4.
 
 ## 8. Files
 
@@ -598,6 +574,9 @@ use it for sizing, not for search.
 
 - **int8 retrieval drift** is the real gate; cosine will pass long before
   ranking does. If the eval set is small, say so in the record.
+- **Downgrade back-compat**: older okfgraph (codec 16/32) does not decode
+  8; the space pin should refuse it, but that path is untested. Do not
+  serve int8 graphs to older clients until it is.
 - **Audio front end** is the only genuinely uncertain piece; the
   features-in fallback keeps the lane shippable if the port slips.
 - **int8 speed**: measured ~0.6 docs/s on CPU and ≈fp32 on CUDA

@@ -5,6 +5,16 @@ isolated scratch area. Nothing here touches the live `kb.db`.
 
 The okfgraph-side record of the same run (precision pins, width, storage
 and `db-size` implications) is `OKFgraph/docs/bench-eg2-precision-width.md`.
+The target architecture and execution plan are `docs/plan-eg2-rollout.md`;
+the detailed workstreams are `docs/plan-eg2-int8-audio.md`.
+
+**Implementation status (2026-11-15).** The q8 text and vision graphs are
+now registered on the self-hosted mirror (`95ff50c`), and okf's pin codec,
+image paths, reembed and `pin_info` handle int8 (`4eaf1e2`). The
+benchmark below loaded the ONNX files directly with `onnxruntime`, so it
+measured the tier, not the registry path; a live `open(..., precision="int8")`
+now reports `int8` and encodes. The labelled retrieval gate and the vision
+cross-modal gate are still open.
 
 ## Setup
 

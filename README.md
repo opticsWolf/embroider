@@ -37,8 +37,12 @@ move between in-process and hosted without re-embedding.
 
 | Capability | Loader (Python / Rust) | Registry ids | Precisions |
 |---|---|---|---|
-| Text embeddings (Jina v5, Gemma 2) | `JinaV5` / `jina` | `jinaai/jina-embeddings-v5-*`, `google/embeddinggemma-2` | fp32, fp16 (nano also int8) |
-| Vision → text space (Jina, Gemma) | `JinaV5Vision`, `GemmaVision` / `vision`, `gemma` | `jina-v5-omni-nano-retrieval-vision`, `google/embeddinggemma-2-vision` | fp32, fp16 |
+| Text embeddings (Jina v5, Gemma 2) | `JinaV5` / `jina` | `jinaai/jina-embeddings-v5-*`, `google/embeddinggemma-2` | fp32, fp16; int8 on nano and gemma-2 |
+| Vision → text space (Jina, Gemma) | `JinaV5Vision`, `GemmaVision` / `vision`, `gemma` | `jina-v5-omni-nano-retrieval-vision`, `google/embeddinggemma-2-vision` | fp32, fp16; int8 on gemma-2 vision |
+`int8` is explicit-only (never `auto`) and falls back to fp32 when a
+model has no measured artifact. The gemma-2 q8 text/vision/audio graphs
+serve from `opticsWolf/embeddinggemma-2-onnx-int8`.
+
 | Cross-encoder rerank | `Reranker` / `rerank` | `cross-encoder/ms-marco-MiniLM-L-6-v2`, `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | fp32, q8 |
 | Typed decisions (GLiClass) | `Decider` / `decide` | `knowledgator/gliclass-small-v1.0`, `knowledgator/gliclass-v4-edge` | fp32 (v4-edge also q8) |
 | Typed decisions (Laya markers) | `LayaDecider` / `laya` | `convaiinnovations/laya-{typed-decisions,english,multilingual}` | fp32 (CUDA fp16 variants) |
