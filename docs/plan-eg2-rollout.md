@@ -101,7 +101,7 @@ involved.
 | Vision gate | int8 vs fp32/fp16 on COCO 1k: all deltas ≤ 0.40 pt; CPU/CUDA live encode finite | `OKFgraph/docs/eg2-int8-gates.md`, 2026-11-16 |
 | Fusion rule | Gemma text/vision precision must match; okf pin + Silk preflight | tests, 2026-11-16 |
 | Downgrade check | okfgraph 0.14.2 refused the int8 graph through the space pin | `OKFgraph/docs/compat.md`, 2026-11-16 |
-| Tests | okf full suite 1339 passed / 7 skipped; Silk 1505 passed / 3 skipped / 1 deselected; S7 ONNX-host file 11 passed | 2026-11-15 / 2026-11-16 |
+| Tests | okf full suite 1344 passed / 7 skipped; Silk 1492 passed / 3 skipped, ledger 15 passed (1 deselected); S7 ONNX-host file 11 passed | 2026-11-16 |
 
 Live text proof: `pin_info` reports `int8`, `space` is
 `…@52614d7…:int8:768:8192:text_embed:v1`, `reembed` keeps int8, and an
